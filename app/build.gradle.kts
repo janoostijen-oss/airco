@@ -12,8 +12,8 @@ android {
         applicationId = "nl.jan.airco"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
     }
 
     // Vaste debug-sleutel in de repo, zodat elke nieuwe build als update
@@ -31,8 +31,12 @@ android {
         debug {
             signingConfig = signingConfigs.getByName("debug")
         }
+        // Release = wat je installeert: R8-geoptimaliseerd, niet-debuggable,
+        // met de baseline profiles van Compose. Veel soepeler dan debug.
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
             signingConfig = signingConfigs.getByName("debug")
         }
     }

@@ -28,6 +28,8 @@ data class UiState(
     val screen: Screen,
     val units: List<AircoUnit> = emptyList(),
     val loading: Boolean = false,
+    /** Alleen true bij zelf omlaag trekken; achtergrond-refreshes zijn onzichtbaar. */
+    val pullRefreshing: Boolean = false,
     val loginUrl: String? = null,
     val message: String? = null,
 )
@@ -88,22 +90,28 @@ class AircoViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- Data ----------
 
-    fun refresh() {
+    fun refresh(userInitiated: Boolean = false) {
         if (_state.value.screen != Screen.Units) return
         refreshJob?.cancel()
         refreshJob = viewModelScope.launch {
-            _state.update { it.copy(loading = true) }
+            // Eerste keer laden (lege lijst) of zelf getrokken: laat zien dat er geladen wordt.
+            // Anders stil op de achtergrond, zonder spinner die de lijst laat verspringen.
+            _state.update {
+                it.copy(loading = it.units.isEmpty(), pullRefreshing = userInitiated || it.pullRefreshing)
+            }
             try {
                 val fresh = api.units()
                 _state.update { s ->
-                    // Temperatuur die je net aan het bijstellen bent niet overschrijven.
                     val merged = fresh.map { u ->
                         val local = s.units.firstOrNull { it.id == u.id }
-                        if (local != null && pendingTemp[u.id]?.isActive == true) {
+                        val candidate = if (local != null && pendingTemp[u.id]?.isActive == true) {
+                            // Temperatuur die je net aan het bijstellen bent niet overschrijven.
                             u.copy(setTemperature = local.setTemperature)
                         } else u
+                        // Ongewijzigd? Houd hetzelfde object, dan slaat Compose die kaart over.
+                        if (local != null && candidate == local) local else candidate
                     }
-                    s.copy(units = merged, loading = false)
+                    s.copy(units = if (merged == s.units) s.units else merged, loading = false, pullRefreshing = false)
                 }
             } catch (e: Exception) {
                 handleError(e)
@@ -181,6 +189,6 @@ class AircoViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = UiState(screen = Screen.Login, message = "Log opnieuw in")
             return
         }
-        _state.update { it.copy(loading = false, message = e.message ?: "Er ging iets mis") }
+        _state.update { it.copy(loading = false, pullRefreshing = false, message = e.message ?: "Er ging iets mis") }
     }
 }

@@ -3,9 +3,10 @@
 package nl.jan.airco.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,8 +14,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
@@ -41,6 +40,7 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -55,7 +55,6 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import nl.jan.airco.AircoViewModel
 import nl.jan.airco.UiState
 import nl.jan.airco.data.AircoUnit
-import nl.jan.airco.data.Mode
 import java.util.Locale
 
 @Composable
@@ -76,7 +75,7 @@ fun UnitsScreen(state: UiState, vm: AircoViewModel) {
             TopAppBar(
                 title = { Text("Airco") },
                 actions = {
-                    IconButton(onClick = vm::refresh) { Icon(Icons.Default.Refresh, "Vernieuwen") }
+                    IconButton(onClick = { vm.refresh(userInitiated = true) }) { Icon(Icons.Default.Refresh, "Vernieuwen") }
                     Box {
                         IconButton(onClick = { menuOpen = true }) { Icon(Icons.Default.MoreVert, "Menu") }
                         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
@@ -92,22 +91,25 @@ fun UnitsScreen(state: UiState, vm: AircoViewModel) {
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         PullToRefreshBox(
-            isRefreshing = state.loading,
-            onRefresh = vm::refresh,
+            isRefreshing = state.pullRefreshing,
+            onRefresh = { vm.refresh(userInitiated = true) },
             modifier = Modifier.fillMaxSize().padding(padding),
         ) {
-            if (state.units.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(if (state.loading) "Laden…" else "Geen airco's gevonden. Trek omlaag om te vernieuwen.")
-                }
-            } else {
-                val showBuilding = state.units.map { it.building }.distinct().size > 1
-                LazyColumn(
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    items(state.units, key = { it.id }) { unit ->
-                        UnitCard(unit, showBuilding, vm)
+            // Gewone scrollende Column i.p.v. LazyColumn: bij een handvol kaarten
+            // worden ze zo één keer opgebouwd en niet bij elke scroll opnieuw.
+            Column(
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (state.units.isEmpty()) {
+                    Text(
+                        if (state.loading) "Laden…" else "Geen airco's gevonden. Trek omlaag om te vernieuwen.",
+                        modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
+                    )
+                } else {
+                    val showBuilding = remember(state.units) { state.units.map { it.building }.distinct().size > 1 }
+                    state.units.forEach { unit ->
+                        key(unit.id) { UnitCard(unit, showBuilding, vm) }
                     }
                 }
             }
@@ -129,12 +131,13 @@ private fun UnitCard(unit: AircoUnit, showBuilding: Boolean, vm: AircoViewModel)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(unit.name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+                    // Altijd één regel, zodat de kaart niet van hoogte verandert als de data binnenkomt.
                     val sub = buildList {
                         if (showBuilding) add(unit.building)
-                        unit.roomTemperature?.let { add("Kamer ${fmt(it)}°") }
+                        add("Kamer ${unit.roomTemperature?.let(::fmt) ?: "–"}°")
                         if (!unit.isConnected) add("offline")
                     }.joinToString(" · ")
-                    if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodyMedium)
+                    Text(sub, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
                 }
                 if (unit.isInError) {
                     Icon(Icons.Default.Warning, "Storing", tint = MaterialTheme.colorScheme.error,
@@ -204,13 +207,6 @@ private fun UnitCard(unit: AircoUnit, showBuilding: Boolean, vm: AircoViewModel)
                         icon = {},
                     ) { Text(speed.label, maxLines = 1, style = MaterialTheme.typography.labelMedium) }
                 }
-            }
-            if (unit.mode == Mode.Fan) {
-                Text(
-                    "In ventilatorstand is er geen temperatuur in te stellen.",
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
             }
         }
     }

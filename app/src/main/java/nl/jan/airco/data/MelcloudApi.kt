@@ -36,7 +36,8 @@ class MelcloudApi(private val store: TokenStore) {
 
     suspend fun units(): List<AircoUnit> {
         val body = send { Request.Builder().url("$BASE_URL/context").get() }
-        return ContextParser.parse(JSONObject(body))
+        // Parsen buiten de UI-thread, zodat een refresh tijdens scrollen niet hapert.
+        return withContext(Dispatchers.Default) { ContextParser.parse(JSONObject(body)) }
     }
 
     suspend fun update(unitId: String, values: Map<String, Any>) {
