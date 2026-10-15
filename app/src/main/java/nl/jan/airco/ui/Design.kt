@@ -90,6 +90,7 @@ object Icons {
     val Minus = stroked(2f, "M6 12h12")
     val Plus = stroked(2f, "M6 12h12", "M12 6v12")
     val Chevron = stroked(2f, "M9 6l6 6-6 6")
+    val Back = stroked(2f, "M19 12H5", "M11 6l-6 6 6 6")
     val Warning = stroked(1.8f, "M12 4l9 16H3z", "M12 10v4", "M12 17h.01")
 
     val Warm = stroked(

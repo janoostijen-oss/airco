@@ -165,25 +165,12 @@ private fun Header(vm: AircoViewModel, title: String, onBack: (() -> Unit)?) {
     var menuOpen by remember { mutableStateOf(false) }
 
     Row(Modifier.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
-        // Op de bedieningspagina is het titelblok de weg terug naar het overzicht.
-        Column(
-            Modifier
-                .weight(1f)
-                .then(
-                    if (onBack != null) {
-                        Modifier.clickable(role = Role.Button, onClickLabel = "Terug naar alle ruimtes", onClick = onBack)
-                    } else Modifier,
-                ),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Text(
-                if (onBack != null) "‹ ALLE RUIMTES" else "MELCLOUD HOME",
-                fontFamily = Manrope,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 11.sp,
-                letterSpacing = 2.sp,
-                color = if (onBack != null) Ink.IconSoft else Ink.Muted,
-            )
+        // Bediening: glazen terugknop vóór de titel (zoals in het ontwerp).
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+            if (onBack != null) {
+                GlassIconButton(Icons.Back, "Terug naar overzicht", tint = Color(0xFFE4E8EF), onClick = onBack)
+                Spacer(Modifier.width(12.dp))
+            }
             Text(
                 title,
                 fontFamily = Sora,
@@ -215,7 +202,13 @@ private fun Header(vm: AircoViewModel, title: String, onBack: (() -> Unit)?) {
 }
 
 @Composable
-private fun GlassIconButton(icon: ImageVector, label: String, iconRotation: Float = 0f, onClick: () -> Unit) {
+private fun GlassIconButton(
+    icon: ImageVector,
+    label: String,
+    iconRotation: Float = 0f,
+    tint: Color = Ink.IconSoft,
+    onClick: () -> Unit,
+) {
     val shape = RoundedCornerShape(14.dp)
     Box(
         Modifier
@@ -227,7 +220,7 @@ private fun GlassIconButton(icon: ImageVector, label: String, iconRotation: Floa
             .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = null, tint = Ink.IconSoft, modifier = Modifier.size(20.dp).rotate(iconRotation))
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp).rotate(iconRotation))
     }
 }
 

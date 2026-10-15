@@ -131,15 +131,6 @@ private fun LoginForm(state: UiState, vm: AircoViewModel) {
             MiniDial(target = 21.0, range = 16.0..31.0, on = true, style = cool, showTarget = true)
             Spacer(Modifier.height(24.dp))
             Text(
-                "MELCLOUD HOME",
-                fontFamily = Manrope,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 11.sp,
-                letterSpacing = 2.sp,
-                color = Ink.Muted,
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
                 "Airco",
                 fontFamily = Sora,
                 fontWeight = FontWeight.SemiBold,
