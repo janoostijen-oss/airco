@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Simpel icoon: sneeuwvlok op blauw. Vector, dus geen mipmaps nodig. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#1E5FA8"
+        android:pathData="M54,0A54,54 0,1 1,54 108A54,54 0,1 1,54 0Z" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5"
+        android:strokeLineCap="round"
+        android:pathData="M54,26L54,82M30,40L78,68M30,68L78,40M46,30L54,38L62,30M46,78L54,70L62,78" />
+</vector>
