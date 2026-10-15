@@ -73,8 +73,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import nl.jan.airco.AircoViewModel
 import nl.jan.airco.UiState
 import nl.jan.airco.data.AircoUnit
@@ -84,7 +83,11 @@ import nl.jan.airco.data.Mode
 
 @Composable
 fun UnitsScreen(state: UiState, vm: AircoViewModel) {
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.refresh() }
+    // Op de voorgrond: automatisch verversen (ook IR-wijzigingen); weg: stoppen.
+    LifecycleResumeEffect(Unit) {
+        vm.onForeground()
+        onPauseOrDispose { vm.onBackground() }
+    }
 
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(state.message) {

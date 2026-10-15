@@ -22,6 +22,7 @@ import nl.jan.airco.data.FanSpeed
 import nl.jan.airco.data.MelcloudApi
 import nl.jan.airco.data.Mode
 import nl.jan.airco.data.NotLoggedInException
+import nl.jan.airco.data.RateLimitedException
 import nl.jan.airco.data.TokenStore
 import kotlin.math.round
 
@@ -175,8 +176,48 @@ class AircoViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun refresh(userInitiated: Boolean = false) {
+    // ---------- Automatisch verversen ----------
+
+    private var pollJob: Job? = null
+    private var lastLocalChangeAt = 0L
+
+    /**
+     * Zolang de app op de voorgrond is: meteen verversen, na 15 s nog eens
+     * (vangt een net gegeven IR-commando), daarna elke minuut — hetzelfde
+     * tempo als melcloud-api's standaard sync. Een wijziging met de
+     * IR-afstandsbediening verschijnt zo vanzelf zodra de wifi-module van de
+     * unit hem aan MELCloud heeft gemeld.
+     */
+    fun onForeground() {
+        pollJob?.cancel()
+        pollJob = viewModelScope.launch {
+            refresh()
+            delay(15_000)
+            pollRefresh()
+            while (true) {
+                delay(60_000)
+                pollRefresh()
+            }
+        }
+    }
+
+    fun onBackground() {
+        pollJob?.cancel()
+        pollJob = null
+    }
+
+    private fun pollRefresh() {
+        // Net zelf iets aangepast? Dan deze ronde overslaan: de server kan die
+        // wijziging nog niet hebben en zou hem op je scherm terugdraaien.
+        if (System.currentTimeMillis() - lastLocalChangeAt < 10_000) return
+        if (pendingTemp.values.any { it.isActive }) return
+        refresh(background = true)
+    }
+
+    fun refresh(userInitiated: Boolean = false, background: Boolean = false) {
         if (_state.value.screen != Screen.Units) return
+        // Een achtergrondronde onderbreekt geen lopende (handmatige) refresh.
+        if (background && refreshJob?.isActive == true) return
         refreshJob?.cancel()
         refreshJob = viewModelScope.launch {
             // Eerste keer laden (lege lijst) of zelf getrokken: laat zien dat er geladen wordt.
@@ -205,7 +246,18 @@ class AircoViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 refreshOutdoor(force = userInitiated)
             } catch (e: Exception) {
-                handleError(e)
+                if (e is RateLimitedException) onBackground() // tempo terug; weer aan bij heropenen
+                if (background && e !is NotLoggedInException && e !is kotlinx.coroutines.CancellationException) {
+                    // Stil mislukken: geen snackbar elke minuut. Alleen zonder data een fout tonen.
+                    _state.update {
+                        it.copy(
+                            loading = false,
+                            loadError = if (it.units.isEmpty()) e.message ?: "Er ging iets mis" else it.loadError,
+                        )
+                    }
+                } else {
+                    handleError(e)
+                }
             }
         }
     }
@@ -281,6 +333,7 @@ class AircoViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun patchLocal(unitId: String, change: (AircoUnit) -> AircoUnit) {
+        lastLocalChangeAt = System.currentTimeMillis()
         _state.update { s -> s.copy(units = s.units.map { if (it.id == unitId) change(it) else it }) }
     }
 
