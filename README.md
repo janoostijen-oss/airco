@@ -6,7 +6,7 @@ geport naar Kotlin zodat de app direct met MELCloud praat (geen server nodig).
 
 ## Wat kan hij
 
-- Inloggen via de echte MELCloud Home-loginpagina (je wachtwoord komt niet in de app, alleen tokens)
+- Eigen loginformulier; e-mail + wachtwoord versleuteld (Android Keystore) bewaard, zodat de app automatisch opnieuw inlogt als MELCloud de sessie beëindigt. De MELCloud-webpagina blijft als reserve als dat ooit niet lukt.
 - Alle airco's uit al je gebouwen (ook gedeelde) in één overzicht
 - Per unit: aan/uit, temperatuur (+/−, met de min/max van je unit per modus), modus en ventilatorstand
 - Kamertemperatuur, offline- en storingsindicatie

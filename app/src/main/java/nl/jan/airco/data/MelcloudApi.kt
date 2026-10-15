@@ -12,7 +12,11 @@ import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-class NotLoggedInException : Exception("Niet (meer) ingelogd")
+class NotLoggedInException(
+    message: String = "Log opnieuw in",
+    /** True als de automatische login technisch faalde (loginpagina veranderd). */
+    val loginFlowBroken: Boolean = false,
+) : Exception(message)
 class RateLimitedException : IOException("MELCloud vraagt even rustig aan te doen (te veel verzoeken). Probeer het later opnieuw.")
 
 /**
@@ -20,19 +24,35 @@ class RateLimitedException : IOException("MELCloud vraagt even rustig aan te doe
  * OlivierZal/melcloud-api `src/api/home.ts`:
  *  - GET  /context                  → gebouwen + units + actuele settings
  *  - PUT  /monitor/ataunit/{id}     → partiële update (power, setTemperature, …)
+ *
+ * Sessiebeheer, in volgorde: access token (vooraf ververst) → refresh token →
+ * stil opnieuw inloggen met de opgeslagen e-mail/wachtwoord. Pas als ook dat
+ * geweigerd wordt, krijg je het loginscherm.
  */
-class MelcloudApi(private val store: TokenStore) {
+class MelcloudApi(private val tokens: TokenStore, private val credentials: CredentialStore) {
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .build()
-    private val refreshLock = Mutex()
+    private val authLock = Mutex()
     private val json = "application/json; charset=utf-8".toMediaType()
 
-    val isLoggedIn: Boolean get() = store.load() != null
+    val isLoggedIn: Boolean get() = tokens.load() != null || credentials.exists()
 
-    fun saveTokens(tokens: Tokens) = store.save(tokens)
-    fun logout() = store.clear()
+    /** Inloggen vanuit het formulier; bij succes worden tokens én gegevens bewaard. */
+    suspend fun login(username: String, password: String) {
+        val fresh = Auth.loginWithPassword(username, password)
+        tokens.save(fresh)
+        credentials.save(CredentialStore.Credentials(username, password))
+    }
+
+    /** Inloggen via de reserve-WebView: alleen tokens, geen wachtwoord bekend. */
+    fun saveTokens(fresh: Tokens) = tokens.save(fresh)
+
+    fun logout() {
+        tokens.clear()
+        credentials.clear()
+    }
 
     suspend fun units(): List<AircoUnit> {
         val body = send { Request.Builder().url("$BASE_URL/context").get() }
@@ -45,16 +65,15 @@ class MelcloudApi(private val store: TokenStore) {
         send { Request.Builder().url("$BASE_URL/monitor/ataunit/$unitId").put(payload) }
     }
 
-    /** Verstuurt met Bearer-token; ververst vooraf als hij bijna verloopt en één keer bij een 401. */
+    /** Verstuurt met Bearer-token; bij een 401 eenmaal sessie herstellen en opnieuw proberen. */
     private suspend fun send(build: () -> Request.Builder): String {
         var token = validAccessToken(forceRefresh = false)
         repeat(2) { attempt ->
-            val result = withContext(Dispatchers.IO) {
+            val (code, text) = withContext(Dispatchers.IO) {
                 http.newCall(build().header("Authorization", "Bearer $token").build()).execute().use { r ->
                     r.code to r.body?.string().orEmpty()
                 }
             }
-            val (code, text) = result
             when {
                 code in 200..299 -> return text
                 code == 401 && attempt == 0 -> token = validAccessToken(forceRefresh = true)
@@ -66,19 +85,37 @@ class MelcloudApi(private val store: TokenStore) {
         throw NotLoggedInException()
     }
 
-    private suspend fun validAccessToken(forceRefresh: Boolean): String = refreshLock.withLock {
-        val current = store.load() ?: throw NotLoggedInException()
+    private suspend fun validAccessToken(forceRefresh: Boolean): String = authLock.withLock {
+        val current = tokens.load() ?: return@withLock reLogin()
         val almostExpired = current.expiresAtMillis - System.currentTimeMillis() < REFRESH_AHEAD_MS
         if (!forceRefresh && !almostExpired && current.accessToken.isNotEmpty()) {
-            return current.accessToken
+            return@withLock current.accessToken
         }
-        val fresh = Auth.refresh(current.refreshToken)
-        if (fresh == null) {
-            store.clear()
-            throw NotLoggedInException()
-        }
-        store.save(fresh)
+        val fresh = Auth.refresh(current.refreshToken) ?: return@withLock reLogin()
+        tokens.save(fresh)
         fresh.accessToken
+    }
+
+    /**
+     * Sessie verlopen: stil opnieuw inloggen met de bewaarde gegevens.
+     * Netwerkfouten worden doorgegeven (je blijft "ingelogd" en kunt het
+     * straks opnieuw proberen); alleen een echte weigering stuurt je naar
+     * het loginscherm.
+     */
+    private suspend fun reLogin(): String {
+        tokens.clear()
+        val saved = credentials.load() ?: throw NotLoggedInException()
+        return try {
+            val fresh = Auth.loginWithPassword(saved.username, saved.password)
+            tokens.save(fresh)
+            fresh.accessToken
+        } catch (e: BadCredentialsException) {
+            // Wachtwoord gewijzigd? Dan niet blijven proberen met het oude.
+            credentials.clear()
+            throw NotLoggedInException("Je wachtwoord werd geweigerd. Log opnieuw in.")
+        } catch (e: LoginFlowException) {
+            throw NotLoggedInException("Automatisch opnieuw inloggen lukte niet: ${e.message}", loginFlowBroken = true)
+        }
     }
 
     private companion object {

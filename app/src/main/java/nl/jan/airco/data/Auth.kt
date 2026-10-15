@@ -3,24 +3,38 @@ package nl.jan.airco.data
 import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.Cookie
+import okhttp3.CookieJar
 import okhttp3.FormBody
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.io.IOException
+import java.net.URLDecoder
 import java.net.URLEncoder
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.concurrent.TimeUnit
+
+/** MELCloud weigert e-mail/wachtwoord. */
+class BadCredentialsException(message: String) : Exception(message)
+
+/** De loginpagina ziet er anders uit dan verwacht (Mitsubishi heeft iets veranderd). */
+class LoginFlowException(message: String) : IOException(message)
+
+class AuthHttpException(val code: Int, path: String) : IOException("Login-server gaf $code op $path")
 
 /**
  * MELCloud Home login: OIDC authorization-code flow met PKCE, zoals de
- * officiële app (client "homemobile"). Overgenomen uit
+ * officiële app (client "homemobile"). Geport uit
  * OlivierZal/melcloud-api `src/api/token-auth.ts`.
  *
- * Verschil met de Node-library: die vult het Cognito-loginformulier
- * headless in. Wij tonen de echte loginpagina in een WebView en vangen
- * de `melcloudhome://?code=…` redirect af. Je wachtwoord komt zo nooit
- * in deze app terecht; alleen de tokens worden bewaard.
+ * Twee manieren om aan een autorisatiecode te komen:
+ *  - [loginWithPassword]: headless, vult het Cognito-formulier zelf in
+ *    (zoals de library). Hiermee kan de app automatisch opnieuw inloggen.
+ *  - [startLogin] + WebView: de echte loginpagina tonen. Reserve-route.
  */
 object Auth {
     const val CLIENT_ID = "homemobile"
@@ -28,12 +42,19 @@ object Auth {
     private const val SCOPES = "openid profile email offline_access IdentityServerApi"
     private const val AUTH_BASIC = "Basic aG9tZW1vYmlsZTo=" // "homemobile:"
     private const val AUTH_BASE_URL = "https://auth.melcloudhome.com"
+    private const val COGNITO_AUTHORITY = "https://live-melcloudhome.auth.eu-west-1.amazoncognito.com"
+    private const val MAX_REDIRECTS = 20
 
-    private val http = OkHttpClient()
+    private val http = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .build()
     private val random = SecureRandom()
 
     /** Alles wat de WebView nodig heeft, plus de verifier voor de token-exchange. */
     data class LoginRequest(val authorizeUrl: String, val verifier: String)
+
+    // ---------------------------------------------------------------- PKCE / PAR
 
     private fun randomUrlSafe(bytes: Int): String {
         val buf = ByteArray(bytes).also(random::nextBytes)
@@ -54,15 +75,13 @@ object Auth {
             .build()
         http.newCall(request).execute().use { response ->
             val text = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                throw AuthHttpException(response.code, path)
-            }
+            if (!response.isSuccessful) throw AuthHttpException(response.code, path)
             return JSONObject(text)
         }
     }
 
-    /** Stap 1: Pushed Authorization Request → URL om in de WebView te openen. */
-    suspend fun startLogin(): LoginRequest = withContext(Dispatchers.IO) {
+    /** Pushed Authorization Request → authorize-URL + bijbehorende verifier (blocking). */
+    private fun pushAuthorizationRequest(): LoginRequest {
         val verifier = randomUrlSafe(32)
         val json = postForm(
             "/connect/par",
@@ -79,30 +98,134 @@ object Auth {
         val requestUri = json.getString("request_uri")
         val url = "$AUTH_BASE_URL/connect/authorize?client_id=$CLIENT_ID" +
             "&request_uri=" + URLEncoder.encode(requestUri, "UTF-8")
-        LoginRequest(url, verifier)
+        return LoginRequest(url, verifier)
     }
 
-    /** Stap 2: de code uit de redirect inwisselen voor tokens. */
-    suspend fun exchangeCode(code: String, verifier: String): Tokens = withContext(Dispatchers.IO) {
-        Tokens.fromJson(
-            postForm(
-                "/connect/token",
-                mapOf(
-                    "client_id" to CLIENT_ID,
-                    "code" to code,
-                    "code_verifier" to verifier,
-                    "grant_type" to "authorization_code",
-                    "redirect_uri" to REDIRECT_URI,
-                ),
+    private fun exchangeCodeBlocking(code: String, verifier: String): Tokens = Tokens.fromJson(
+        postForm(
+            "/connect/token",
+            mapOf(
+                "client_id" to CLIENT_ID,
+                "code" to code,
+                "code_verifier" to verifier,
+                "grant_type" to "authorization_code",
+                "redirect_uri" to REDIRECT_URI,
             ),
-            previousRefreshToken = null,
-        )
+        ),
+        previousRefreshToken = null,
+    )
+
+    // ---------------------------------------------------------------- WebView-route
+
+    suspend fun startLogin(): LoginRequest = withContext(Dispatchers.IO) { pushAuthorizationRequest() }
+
+    suspend fun exchangeCode(code: String, verifier: String): Tokens =
+        withContext(Dispatchers.IO) { exchangeCodeBlocking(code, verifier) }
+
+    // ---------------------------------------------------------------- Headless route
+
+    /**
+     * Volledige headless login met e-mail en wachtwoord:
+     * PAR → authorize (redirects naar Cognito) → formulier posten →
+     * callback-redirects volgen tot `melcloudhome://?code=…` → tokens.
+     */
+    suspend fun loginWithPassword(username: String, password: String): Tokens = withContext(Dispatchers.IO) {
+        val request = pushAuthorizationRequest()
+        // Eigen client per login: verse cookies, en redirects zelf afhandelen
+        // (de keten springt tussen auth.melcloudhome.com en Cognito heen en weer).
+        val client = http.newBuilder()
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .cookieJar(MemoryCookieJar())
+            .build()
+
+        val (_, loginHtml) = followRedirects(client, request.authorizeUrl)
+        val action = extractFormAction(loginHtml)
+            ?: throw LoginFlowException("Loginformulier niet gevonden op de MELCloud-pagina")
+
+        val form = FormBody.Builder().apply {
+            extractHiddenFields(loginHtml).forEach { (k, v) -> add(k, v) }
+            add("cognitoAsfData", "")
+            add("username", username)
+            add("password", password)
+        }.build()
+        val (submitCode, submitLocation, submitBody) = client.newCall(
+            Request.Builder().url(action).post(form).build(),
+        ).execute().use { r -> Triple(r.code, r.header("Location"), r.body?.string().orEmpty()) }
+
+        if (submitCode !in 300..399 || submitLocation.isNullOrEmpty()) {
+            // Cognito toont de loginpagina opnieuw met een foutmelding = gegevens geweigerd.
+            val reason = Regex("""(?:id|class)="errorMessage[^"]*"[^>]*>([^<]*)<""")
+                .find(submitBody)?.groupValues?.get(1)?.trim().orEmpty()
+            throw BadCredentialsException(reason.ifEmpty { "E-mail of wachtwoord onjuist" })
+        }
+
+        val (finalUrl, _) = followRedirects(client, resolve(action, submitLocation))
+        val params = queryParams(finalUrl)
+        val code = params["code"]
+            ?: throw LoginFlowException(
+                "Geen autorisatiecode ontvangen" + (params["error_description"] ?: params["error"])
+                    ?.let { " ($it)" }.orEmpty(),
+            )
+        exchangeCodeBlocking(code, request.verifier)
     }
+
+    /** Volgt HTTP- én JavaScript/meta-redirects tot een gewone pagina of `melcloudhome://`. */
+    private fun followRedirects(client: OkHttpClient, start: String): Pair<String, String> {
+        var url = start
+        repeat(MAX_REDIRECTS) {
+            if (url.startsWith(REDIRECT_URI)) return url to ""
+            val (code, location, body) = client.newCall(Request.Builder().url(url).get().build())
+                .execute().use { r -> Triple(r.code, r.header("Location"), r.body?.string().orEmpty()) }
+            val next = when {
+                code in 300..399 && !location.isNullOrEmpty() -> location
+                else -> extractPageRedirect(body)
+            } ?: return url to body
+            url = resolve(url, next)
+        }
+        throw LoginFlowException("Te veel doorverwijzingen tijdens het inloggen")
+    }
+
+    private fun resolve(base: String, location: String): String = when {
+        location.startsWith(REDIRECT_URI) || location.startsWith("http") -> location
+        else -> base.toHttpUrl().resolve(location)?.toString()
+            ?: throw LoginFlowException("Ongeldige doorverwijzing: $location")
+    }
+
+    private fun extractFormAction(html: String): String? {
+        val raw = Regex("""<form[^>]+action="([^"]+)"""", RegexOption.IGNORE_CASE)
+            .find(html)?.groupValues?.get(1) ?: return null
+        val action = raw.replace("&amp;", "&")
+        return if (action.startsWith("/")) COGNITO_AUTHORITY + action else action
+    }
+
+    private fun extractHiddenFields(html: String): Map<String, String> =
+        Regex("""<input[^>]+type="hidden"[^>]*>""", RegexOption.IGNORE_CASE).findAll(html).mapNotNull { m ->
+            val tag = m.value
+            val name = Regex("""name="([^"]+)"""").find(tag)?.groupValues?.get(1) ?: return@mapNotNull null
+            val value = Regex("""value="([^"]*)"""").find(tag)?.groupValues?.get(1).orEmpty()
+            name to value
+        }.toMap()
+
+    private fun extractPageRedirect(html: String): String? {
+        val js = Regex("""window\.location\s*=\s*['"]([^'"]+)""").find(html)?.groupValues?.get(1)
+        val meta = Regex("""<meta[^>]+http-equiv="refresh"[^>]+content="[^"]*url=([^"]+)""", RegexOption.IGNORE_CASE)
+            .find(html)?.groupValues?.get(1)
+        return (js ?: meta)?.replace("&amp;", "&")
+    }
+
+    private fun queryParams(url: String): Map<String, String> =
+        url.substringAfter('?', "").substringBefore('#').split('&').filter { it.contains('=') }.associate {
+            val (k, v) = it.split('=', limit = 2)
+            URLDecoder.decode(k, "UTF-8") to URLDecoder.decode(v, "UTF-8")
+        }
+
+    // ---------------------------------------------------------------- Refresh
 
     /**
      * Nieuwe access token via de refresh token. `null` = de server weigert
-     * hem (opnieuw inloggen nodig); netwerkfouten worden gewoon gegooid,
-     * zodat je bij slechte wifi niet uitgelogd raakt.
+     * hem; netwerkfouten worden gewoon gegooid, zodat je bij slechte wifi
+     * niet uitgelogd raakt.
      */
     suspend fun refresh(refreshToken: String): Tokens? = withContext(Dispatchers.IO) {
         try {
@@ -123,7 +246,25 @@ object Auth {
     }
 }
 
-class AuthHttpException(val code: Int, path: String) : IOException("Login-server gaf $code op $path")
+/** Simpele cookie-opslag voor één loginpoging (meerdere domeinen). */
+private class MemoryCookieJar : CookieJar {
+    private val cookies = mutableListOf<Cookie>()
+
+    @Synchronized
+    override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
+        for (c in cookies) {
+            this.cookies.removeAll { it.name == c.name && it.domain == c.domain && it.path == c.path }
+            this.cookies.add(c)
+        }
+    }
+
+    @Synchronized
+    override fun loadForRequest(url: HttpUrl): List<Cookie> {
+        val now = System.currentTimeMillis()
+        cookies.removeAll { it.expiresAt < now }
+        return cookies.filter { it.matches(url) }
+    }
+}
 
 data class Tokens(val accessToken: String, val refreshToken: String, val expiresAtMillis: Long) {
     companion object {

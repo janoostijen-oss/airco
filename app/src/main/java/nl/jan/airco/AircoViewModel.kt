@@ -12,6 +12,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import nl.jan.airco.data.AircoUnit
 import nl.jan.airco.data.Auth
+import nl.jan.airco.data.BadCredentialsException
+import nl.jan.airco.data.CredentialStore
+import nl.jan.airco.data.LoginFlowException
 import nl.jan.airco.data.FanSpeed
 import nl.jan.airco.data.MelcloudApi
 import nl.jan.airco.data.Mode
@@ -30,12 +33,15 @@ data class UiState(
     val loading: Boolean = false,
     /** Alleen true bij zelf omlaag trekken; achtergrond-refreshes zijn onzichtbaar. */
     val pullRefreshing: Boolean = false,
-    val loginUrl: String? = null,
     val message: String? = null,
+    /** Reserve-route: alleen aangeboden als het formulier-inloggen technisch faalt. */
+    val webLoginOffered: Boolean = false,
+    val showWebLogin: Boolean = false,
+    val loginUrl: String? = null,
 )
 
 class AircoViewModel(app: Application) : AndroidViewModel(app) {
-    private val api = MelcloudApi(TokenStore(app))
+    private val api = MelcloudApi(TokenStore(app), CredentialStore(app))
     private val _state = MutableStateFlow(UiState(screen = if (api.isLoggedIn) Screen.Units else Screen.Login))
     val state: StateFlow<UiState> = _state.asStateFlow()
 
@@ -44,6 +50,38 @@ class AircoViewModel(app: Application) : AndroidViewModel(app) {
     private var refreshJob: Job? = null
 
     // ---------- Login ----------
+
+    /** Het normale loginformulier. Bij succes worden de gegevens versleuteld bewaard. */
+    fun login(username: String, password: String) {
+        if (_state.value.loading) return
+        viewModelScope.launch {
+            _state.update { it.copy(loading = true, message = null) }
+            try {
+                api.login(username.trim(), password)
+                _state.value = UiState(screen = Screen.Units)
+                refresh()
+            } catch (e: BadCredentialsException) {
+                _state.update { it.copy(loading = false, message = e.message) }
+            } catch (e: LoginFlowException) {
+                _state.update {
+                    it.copy(
+                        loading = false,
+                        webLoginOffered = true,
+                        message = "Inloggen via de app lukt nu niet (${e.message}). Gebruik de MELCloud-pagina hieronder.",
+                    )
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                _state.update { it.copy(loading = false, message = "Geen verbinding met MELCloud: ${e.message}") }
+            }
+        }
+    }
+
+    fun showWebLogin(show: Boolean) {
+        _state.update { it.copy(showWebLogin = show, loginUrl = null, message = null) }
+        verifier = null
+        if (show) prepareLogin()
+    }
 
     fun prepareLogin() {
         if (_state.value.loginUrl != null) return
@@ -72,7 +110,7 @@ class AircoViewModel(app: Application) : AndroidViewModel(app) {
                 .onSuccess { tokens ->
                     api.saveTokens(tokens)
                     verifier = null
-                    _state.update { it.copy(screen = Screen.Units, loginUrl = null, loading = false) }
+                    _state.value = UiState(screen = Screen.Units)
                     refresh()
                 }
                 .onFailure { e ->
@@ -185,8 +223,12 @@ class AircoViewModel(app: Application) : AndroidViewModel(app) {
     private fun handleError(e: Exception) {
         if (e is kotlinx.coroutines.CancellationException) throw e
         if (e is NotLoggedInException) {
-            api.logout()
-            _state.value = UiState(screen = Screen.Login, message = "Log opnieuw in")
+            // De API heeft al opgeruimd wat ongeldig is (en stil opnieuw inloggen geprobeerd).
+            _state.value = UiState(
+                screen = Screen.Login,
+                message = e.message,
+                webLoginOffered = e.loginFlowBroken,
+            )
             return
         }
         _state.update { it.copy(loading = false, pullRefreshing = false, message = e.message ?: "Er ging iets mis") }
