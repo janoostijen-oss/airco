@@ -17,6 +17,7 @@ class NotLoggedInException(
     /** True als de automatische login technisch faalde (loginpagina veranderd). */
     val loginFlowBroken: Boolean = false,
 ) : Exception(message)
+class HttpStatusException(val code: Int) : IOException("MELCloud gaf foutcode $code")
 class RateLimitedException : IOException("MELCloud vraagt even rustig aan te doen (te veel verzoeken). Probeer het later opnieuw.")
 
 /**
@@ -55,7 +56,19 @@ class MelcloudApi(private val tokens: TokenStore, private val credentials: Crede
     }
 
     suspend fun units(): List<AircoUnit> {
-        val body = send { Request.Builder().url("$BASE_URL/context").get() }
+        val body = try {
+            send { Request.Builder().url("$BASE_URL/context").get() }
+        } catch (e: HttpStatusException) {
+            // 404 op /context = token is geldig, maar dit account heeft geen MELCloud Home-woning
+            // (zie melcloud-api `#requestContext`). Vaak: ingelogd met een ander e-mailadres.
+            if (e.code == 404) {
+                throw IOException(
+                    "Dit MELCloud Home-account heeft geen woning of apparaten (404). " +
+                        "Ben je met hetzelfde e-mailadres ingelogd als in de officiële app?",
+                )
+            }
+            throw e
+        }
         // Parsen buiten de UI-thread, zodat een refresh tijdens scrollen niet hapert.
         return withContext(Dispatchers.Default) { ContextParser.parse(JSONObject(body)) }
     }
@@ -79,7 +92,7 @@ class MelcloudApi(private val tokens: TokenStore, private val credentials: Crede
                 code == 401 && attempt == 0 -> token = validAccessToken(forceRefresh = true)
                 code == 401 -> throw NotLoggedInException()
                 code == 429 -> throw RateLimitedException()
-                else -> throw IOException("MELCloud gaf foutcode $code")
+                else -> throw HttpStatusException(code)
             }
         }
         throw NotLoggedInException()

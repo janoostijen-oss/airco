@@ -78,13 +78,31 @@ data class AircoUnit(
 object ContextParser {
     fun parse(json: JSONObject): List<AircoUnit> {
         val units = mutableListOf<AircoUnit>()
+        val failures = mutableListOf<Throwable>()
+        var buildingCount = 0
         for (key in listOf("buildings", "guestBuildings")) {
             val buildings = json.optJSONArray(key) ?: continue
             for (b in buildings.objects()) {
+                buildingCount++
                 val buildingName = b.optString("name")
                 val ataUnits = b.optJSONArray("airToAirUnits") ?: continue
-                for (u in ataUnits.objects()) units += parseUnit(u, buildingName)
+                for (u in ataUnits.objects()) {
+                    // Eén afwijkende unit mag niet de hele lijst laten mislukken.
+                    runCatching { parseUnit(u, buildingName) }
+                        .onSuccess { units += it }
+                        .onFailure { failures += it }
+                }
             }
+        }
+        if (units.isEmpty()) {
+            // Geen stille lege lijst: zeg wát er leeg was, zodat we weten waar het misgaat.
+            val detail = when {
+                failures.isNotEmpty() ->
+                    "${failures.size} airco('s) konden niet gelezen worden: ${failures.first().message}"
+                buildingCount == 0 -> "MELCloud gaf geen woningen terug voor dit account."
+                else -> "Wel $buildingCount woning(en) gevonden, maar zonder airco's."
+            }
+            throw java.io.IOException(detail)
         }
         return units.sortedWith(compareBy({ it.building }, { it.name }))
     }

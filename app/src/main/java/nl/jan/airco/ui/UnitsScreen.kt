@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -102,10 +103,19 @@ fun UnitsScreen(state: UiState, vm: AircoViewModel) {
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 if (state.units.isEmpty()) {
-                    Text(
-                        if (state.loading) "Laden…" else "Geen airco's gevonden. Trek omlaag om te vernieuwen.",
-                        modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
-                    )
+                    Column(Modifier.fillMaxWidth().padding(top = 48.dp)) {
+                        when {
+                            state.loading -> Text("Laden…")
+                            state.loadError != null -> {
+                                Text("Kon je airco's niet ophalen", style = MaterialTheme.typography.titleMedium)
+                                Spacer(Modifier.height(8.dp))
+                                Text(state.loadError, color = MaterialTheme.colorScheme.error)
+                                Spacer(Modifier.height(16.dp))
+                                Button(onClick = { vm.refresh(userInitiated = true) }) { Text("Opnieuw proberen") }
+                            }
+                            else -> Text("Geen airco's gevonden. Trek omlaag om te vernieuwen.")
+                        }
+                    }
                 } else {
                     val showBuilding = remember(state.units) { state.units.map { it.building }.distinct().size > 1 }
                     state.units.forEach { unit ->

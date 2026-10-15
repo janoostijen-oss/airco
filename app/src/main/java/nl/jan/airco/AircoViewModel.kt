@@ -34,6 +34,8 @@ data class UiState(
     /** Alleen true bij zelf omlaag trekken; achtergrond-refreshes zijn onzichtbaar. */
     val pullRefreshing: Boolean = false,
     val message: String? = null,
+    /** Laatste fout bij ophalen; blijft zichtbaar zolang er geen units zijn. */
+    val loadError: String? = null,
     /** Reserve-route: alleen aangeboden als het formulier-inloggen technisch faalt. */
     val webLoginOffered: Boolean = false,
     val showWebLogin: Boolean = false,
@@ -149,7 +151,12 @@ class AircoViewModel(app: Application) : AndroidViewModel(app) {
                         // Ongewijzigd? Houd hetzelfde object, dan slaat Compose die kaart over.
                         if (local != null && candidate == local) local else candidate
                     }
-                    s.copy(units = if (merged == s.units) s.units else merged, loading = false, pullRefreshing = false)
+                    s.copy(
+                        units = if (merged == s.units) s.units else merged,
+                        loading = false,
+                        pullRefreshing = false,
+                        loadError = null,
+                    )
                 }
             } catch (e: Exception) {
                 handleError(e)
@@ -231,6 +238,15 @@ class AircoViewModel(app: Application) : AndroidViewModel(app) {
             )
             return
         }
-        _state.update { it.copy(loading = false, pullRefreshing = false, message = e.message ?: "Er ging iets mis") }
+        val text = e.message?.takeIf { it.isNotBlank() } ?: "Er ging iets mis (${e.javaClass.simpleName})"
+        _state.update {
+            it.copy(
+                loading = false,
+                pullRefreshing = false,
+                loadError = text,
+                // Met een lege lijst staat de fout al groot in beeld; dan geen snackbar erbij.
+                message = if (it.units.isEmpty()) null else text,
+            )
+        }
     }
 }
