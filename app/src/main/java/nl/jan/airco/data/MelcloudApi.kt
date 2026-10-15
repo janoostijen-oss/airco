@@ -4,12 +4,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.IOException
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 import java.util.concurrent.TimeUnit
 
 class NotLoggedInException(
@@ -71,6 +76,25 @@ class MelcloudApi(private val tokens: TokenStore, private val credentials: Crede
         }
         // Parsen buiten de UI-thread, zodat een refresh tijdens scrollen niet hapert.
         return withContext(Dispatchers.Default) { ContextParser.parse(JSONObject(body)) }
+    }
+
+    /**
+     * Meest recente buitentemperatuur die deze unit meldt (van zijn buitenunit),
+     * uit het trendrapport van de laatste 24 uur. `null` als er niets is.
+     */
+    suspend fun latestOutdoorReading(unitId: String): Reading? {
+        // Het rapport wil .NET-stijl UTC-tijden met 7 nullen achter de seconde
+        // (anders geeft het een leeg venster; zie melcloud-api `toReportDate`).
+        val fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").withZone(ZoneOffset.UTC)
+        val now = Instant.now().truncatedTo(ChronoUnit.SECONDS)
+        val url = "$BASE_URL/report/v1/trendsummary".toHttpUrl().newBuilder()
+            .addQueryParameter("unitId", unitId)
+            .addQueryParameter("from", fmt.format(now.minus(24, ChronoUnit.HOURS)))
+            .addQueryParameter("to", fmt.format(now))
+            .addQueryParameter("period", "Hourly")
+            .build()
+        val body = send { Request.Builder().url(url).get() }
+        return withContext(Dispatchers.Default) { ReportParser.latestOutdoor(body) }
     }
 
     suspend fun update(unitId: String, values: Map<String, Any>) {

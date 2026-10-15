@@ -136,7 +136,7 @@ fun UnitsScreen(state: UiState, vm: AircoViewModel) {
 
                     when {
                         state.units.isEmpty() -> EmptyState(state, vm)
-                        detail == null -> Overview(state.units, vm, onOpen = { detailId = it })
+                        detail == null -> Overview(state.units, state.outdoorTemperature, vm, onOpen = { detailId = it })
                         else -> {
                             if (state.units.size > 1) {
                                 Spacer(Modifier.height(18.dp))
@@ -697,9 +697,9 @@ private fun EmptyState(state: UiState, vm: AircoViewModel) {
 // ----------------------------------------------------------------------------- overzicht "Alle ruimtes"
 
 @Composable
-private fun Overview(units: List<AircoUnit>, vm: AircoViewModel, onOpen: (String) -> Unit) {
+private fun Overview(units: List<AircoUnit>, outdoorTemperature: Double?, vm: AircoViewModel, onOpen: (String) -> Unit) {
     Spacer(Modifier.height(18.dp))
-    SummaryStrip(units, vm)
+    SummaryStrip(units, outdoorTemperature, vm)
     Spacer(Modifier.height(16.dp))
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         units.forEach { u -> key(u.id) { RoomOverviewCard(u, vm, onOpen = { onOpen(u.id) }) } }
@@ -707,9 +707,9 @@ private fun Overview(units: List<AircoUnit>, vm: AircoViewModel, onOpen: (String
 }
 
 @Composable
-private fun SummaryStrip(units: List<AircoUnit>, vm: AircoViewModel) {
-    val temps = units.mapNotNull { it.roomTemperature }
-    val avg = if (temps.isEmpty()) "–" else fmtTemp(kotlin.math.round(temps.average() * 10) / 10)
+private fun SummaryStrip(units: List<AircoUnit>, outdoorTemperature: Double?, vm: AircoViewModel) {
+    // Gemiddelde van alle buitenunits, elk met de meest recente meting (berekend in het ViewModel).
+    val outdoor = outdoorTemperature?.let { fmtTemp(kotlin.math.round(it * 10) / 10) } ?: "–"
     val onCount = units.count { it.power }
     val anyOn = onCount > 0
     val shape = RoundedCornerShape(22.dp)
@@ -724,8 +724,8 @@ private fun SummaryStrip(units: List<AircoUnit>, vm: AircoViewModel) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        SummaryStat("Binnen gemiddeld", Modifier.weight(1f)) {
-            Text("$avg°", fontFamily = Sora, fontWeight = FontWeight.Light, fontSize = 26.sp, letterSpacing = (-0.8).sp, color = Ink.Text)
+        SummaryStat("Buiten", Modifier.weight(1f)) {
+            Text("$outdoor°", fontFamily = Sora, fontWeight = FontWeight.Light, fontSize = 26.sp, letterSpacing = (-0.8).sp, color = Ink.Text)
         }
         Box(Modifier.width(1.dp).height(40.dp).background(Ink.white(0.08f)))
         SummaryStat("Actief", Modifier.weight(1f)) {

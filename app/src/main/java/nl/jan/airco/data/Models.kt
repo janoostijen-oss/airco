@@ -72,6 +72,8 @@ data class AircoUnit(
     val mode: Mode?,
     val fanSpeed: FanSpeed,
     val capabilities: Capabilities,
+    /** Gedeelde buitenunit (multi-split); `null` = eigen buitenunit. */
+    val systemId: String? = null,
 )
 
 /** Parser voor de `/context` response (eigen + gedeelde gebouwen, alleen airco's). */
@@ -134,6 +136,7 @@ object ContextParser {
             building = building,
             isConnected = u.optBoolean("isConnected", true),
             isInError = u.optBoolean("isInError", false),
+            systemId = if (u.isNull("systemId")) null else u.optString("systemId").ifBlank { null },
             power = settings["Power"] == "True",
             roomTemperature = settings["RoomTemperature"]?.toDoubleOrNull(),
             setTemperature = settings["SetTemperature"]?.toDoubleOrNull() ?: 21.0,
@@ -150,4 +153,58 @@ object ContextParser {
     }
 
     private fun JSONArray.objects(): List<JSONObject> = (0 until length()).mapNotNull { optJSONObject(it) }
+}
+
+/** Eén meting: tijdstip (UTC, zoals de API het geeft) + waarde. */
+data class Reading(val time: String, val value: Double)
+
+/**
+ * Parser voor `/report/v1/trendsummary`: haalt de meest recente
+ * buitentemperatuur uit de dataset `outside_temperature`. Valt terug op
+ * `previousTriggers` (laatste meting vóór het venster) als er in het
+ * venster zelf niets gemeten is.
+ */
+object ReportParser {
+    private const val OUTSIDE = "outside_temperature"
+
+    fun latestOutdoor(body: String): Reading? {
+        val trimmed = body.trim()
+        val reports: List<JSONObject> = when {
+            trimmed.startsWith("[") -> JSONArray(trimmed).let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it) } }
+            trimmed.startsWith("{") -> listOf(JSONObject(trimmed))
+            else -> emptyList()
+        }
+        var best: Reading? = null
+        fun consider(time: String, value: Double) {
+            if (value.isNaN()) return
+            val t = time.replace(' ', 'T')
+            if (best == null || t > best!!.time) best = Reading(t, value)
+        }
+        for (report in reports) {
+            val datasets = report.optJSONArray("datasets") ?: continue
+            for (i in 0 until datasets.length()) {
+                val ds = datasets.optJSONObject(i) ?: continue
+                val isOutside = ds.optString("id") == OUTSIDE ||
+                    ds.optString("label").contains("outside", ignoreCase = true)
+                if (!isOutside) continue
+                val data = ds.optJSONArray("data") ?: continue
+                for (j in 0 until data.length()) {
+                    val p = data.optJSONObject(j) ?: continue
+                    if (p.isNull("y")) continue
+                    consider(p.optString("x"), p.optDouble("y"))
+                }
+            }
+        }
+        if (best == null) {
+            for (report in reports) {
+                val triggers = report.optJSONArray("previousTriggers") ?: continue
+                for (i in 0 until triggers.length()) {
+                    val t = triggers.optJSONObject(i) ?: continue
+                    if (t.optString("measure") != OUTSIDE || t.isNull("value")) continue
+                    consider(t.optString("trigger"), t.optDouble("value"))
+                }
+            }
+        }
+        return best
+    }
 }

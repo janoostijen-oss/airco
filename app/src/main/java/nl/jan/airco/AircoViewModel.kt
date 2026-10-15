@@ -4,6 +4,9 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -36,11 +39,15 @@ data class UiState(
     val message: String? = null,
     /** Laatste fout bij ophalen; blijft zichtbaar zolang er geen units zijn. */
     val loadError: String? = null,
+    /** Gemiddelde buitentemperatuur over alle buitenunits (meest recente meting elk). */
+    val outdoorTemperature: Double? = null,
     /** Reserve-route: alleen aangeboden als het formulier-inloggen technisch faalt. */
     val webLoginOffered: Boolean = false,
     val showWebLogin: Boolean = false,
     val loginUrl: String? = null,
 )
+
+private const val OUTDOOR_INTERVAL_MS = 10 * 60 * 1000L
 
 class AircoViewModel(app: Application) : AndroidViewModel(app) {
     private val api = MelcloudApi(TokenStore(app), CredentialStore(app))
@@ -130,6 +137,44 @@ class AircoViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- Data ----------
 
+    private var outdoorFetchedAt = 0L
+    private var outdoorJob: Job? = null
+
+    /**
+     * Buitentemperatuur: per buitenunit de meest recente meting, daarna het
+     * gemiddelde. Binnenunits met hetzelfde systemId delen één buitenunit
+     * (multi-split) en tellen dus één keer. Hooguit eens per 10 minuten,
+     * tenzij je zelf vernieuwt: het rapport kost een verzoek per unit.
+     */
+    private fun refreshOutdoor(force: Boolean) {
+        val units = _state.value.units
+        if (units.isEmpty() || outdoorJob?.isActive == true) return
+        if (!force && System.currentTimeMillis() - outdoorFetchedAt < OUTDOOR_INTERVAL_MS) return
+        outdoorJob = viewModelScope.launch {
+            val readings = coroutineScope {
+                units.map { u ->
+                    async {
+                        val reading = try {
+                            api.latestOutdoorReading(u.id)
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            null // Buitentemperatuur is bijzaak: stil overslaan.
+                        }
+                        (u.systemId ?: u.id) to reading
+                    }
+                }.awaitAll()
+            }
+            val perOutdoorUnit = readings
+                .filter { it.second != null }
+                .groupBy({ it.first }, { it.second!! })
+                .map { (_, rs) -> rs.maxBy { it.time }.value }
+            if (perOutdoorUnit.isNotEmpty()) {
+                outdoorFetchedAt = System.currentTimeMillis()
+                _state.update { it.copy(outdoorTemperature = perOutdoorUnit.average()) }
+            }
+        }
+    }
+
     fun refresh(userInitiated: Boolean = false) {
         if (_state.value.screen != Screen.Units) return
         refreshJob?.cancel()
@@ -158,6 +203,7 @@ class AircoViewModel(app: Application) : AndroidViewModel(app) {
                         loadError = null,
                     )
                 }
+                refreshOutdoor(force = userInitiated)
             } catch (e: Exception) {
                 handleError(e)
             }
