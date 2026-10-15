@@ -24,7 +24,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -43,8 +42,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.res.painterResource
-import androidx.compose.foundation.Image
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -53,8 +50,20 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.unit.sp
+import nl.jan.airco.data.Mode
 import nl.jan.airco.AircoViewModel
-import nl.jan.airco.R
 import nl.jan.airco.UiState
 import nl.jan.airco.data.Auth
 
@@ -77,9 +86,38 @@ private fun LoginForm(state: UiState, vm: AircoViewModel) {
         }
     }
 
+    val fieldColors = OutlinedTextFieldDefaults.colors(
+        focusedTextColor = Ink.Text,
+        unfocusedTextColor = Ink.Text,
+        focusedBorderColor = Ink.Accent,
+        unfocusedBorderColor = Ink.white(0.12f),
+        focusedContainerColor = Ink.white(0.05f),
+        unfocusedContainerColor = Ink.white(0.03f),
+        disabledContainerColor = Ink.white(0.02f),
+        focusedLabelColor = Ink.Accent,
+        unfocusedLabelColor = Ink.Muted,
+        cursorColor = Ink.Accent,
+    )
+    val fieldShape = RoundedCornerShape(16.dp)
+    val cool = Mode.Cool.style()
+
     // Buitenste Box centreert; de Column scrollt alleen als het toetsenbord ruimte inneemt.
     Box(
-        Modifier.fillMaxSize().safeDrawingPadding().imePadding(),
+        Modifier
+            .fillMaxSize()
+            .background(Ink.Ground)
+            .drawBehind {
+                drawRect(
+                    Brush.radialGradient(
+                        0f to Ink.GroundTop,
+                        1f to Ink.Ground,
+                        center = Offset(size.width / 2, 0f),
+                        radius = size.height * 0.55f,
+                    ),
+                )
+            }
+            .safeDrawingPadding()
+            .imePadding(),
         contentAlignment = Alignment.Center,
     ) {
         Column(
@@ -90,14 +128,31 @@ private fun LoginForm(state: UiState, vm: AircoViewModel) {
                 .padding(horizontal = 28.dp, vertical = 32.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Image(painterResource(R.drawable.ic_launcher), contentDescription = null, modifier = Modifier.size(88.dp))
-            Spacer(Modifier.height(20.dp))
-            Text("Airco", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(6.dp))
+            MiniDial(target = 21.0, range = 16.0..31.0, on = true, style = cool, showTarget = true)
+            Spacer(Modifier.height(24.dp))
+            Text(
+                "MELCLOUD HOME",
+                fontFamily = Manrope,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 11.sp,
+                letterSpacing = 2.sp,
+                color = Ink.Muted,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Airco",
+                fontFamily = Sora,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 32.sp,
+                letterSpacing = (-0.8).sp,
+                color = Ink.Text,
+            )
+            Spacer(Modifier.height(8.dp))
             Text(
                 "Log in met je MELCloud Home-account",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontFamily = Manrope,
+                fontSize = 15.sp,
+                color = Ink.Muted2,
                 textAlign = TextAlign.Center,
             )
             Spacer(Modifier.height(32.dp))
@@ -109,6 +164,8 @@ private fun LoginForm(state: UiState, vm: AircoViewModel) {
                 singleLine = true,
                 enabled = !state.loading,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
+                colors = fieldColors,
+                shape = fieldShape,
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(12.dp))
@@ -121,11 +178,13 @@ private fun LoginForm(state: UiState, vm: AircoViewModel) {
                 visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
                 trailingIcon = {
                     TextButton(onClick = { showPassword = !showPassword }) {
-                        Text(if (showPassword) "Verberg" else "Toon")
+                        Text(if (showPassword) "Verberg" else "Toon", fontFamily = Manrope, color = Ink.IconSoft)
                     }
                 },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { submit() }),
+                colors = fieldColors,
+                shape = fieldShape,
                 modifier = Modifier.fillMaxWidth(),
             )
 
@@ -133,41 +192,55 @@ private fun LoginForm(state: UiState, vm: AircoViewModel) {
                 Spacer(Modifier.height(12.dp))
                 Text(
                     it,
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodyMedium,
+                    color = Ink.Error,
+                    fontFamily = Manrope,
+                    fontSize = 14.sp,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
 
             Spacer(Modifier.height(24.dp))
-            Button(
-                onClick = { submit() },
-                enabled = canSubmit,
-                modifier = Modifier.fillMaxWidth().height(52.dp),
+            // Knop in de "Koel"-gradient van het ontwerp.
+            val btnShape = RoundedCornerShape(16.dp)
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(54.dp)
+                    .then(if (canSubmit) Modifier.shadow(16.dp, btnShape, ambientColor = cool.c2, spotColor = cool.c2) else Modifier)
+                    .clip(btnShape)
+                    .background(
+                        if (canSubmit || state.loading) Brush.linearGradient(listOf(cool.c1, cool.c2))
+                        else Brush.linearGradient(listOf(Ink.white(0.06f), Ink.white(0.06f))),
+                    )
+                    .clickable(enabled = canSubmit, role = Role.Button, onClick = { submit() }),
+                contentAlignment = Alignment.Center,
             ) {
                 if (state.loading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(22.dp),
-                        strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onPrimary,
-                    )
+                    CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp, color = Color.White)
                 } else {
-                    Text("Inloggen", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Inloggen",
+                        fontFamily = Manrope,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        color = if (canSubmit) Color.White else Ink.Muted,
+                    )
                 }
             }
 
             if (state.webLoginOffered) {
                 Spacer(Modifier.height(12.dp))
-                OutlinedButton(onClick = { vm.showWebLogin(true) }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Inloggen via MELCloud-pagina")
+                OutlinedButton(onClick = { vm.showWebLogin(true) }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                    Text("Inloggen via MELCloud-pagina", fontFamily = Manrope, color = Ink.IconSoft)
                 }
             }
 
             Spacer(Modifier.height(24.dp))
             Text(
                 "Je gegevens worden versleuteld op dit toestel bewaard, zodat de app automatisch ingelogd blijft.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontFamily = Manrope,
+                fontSize = 12.sp,
+                color = Ink.Faint,
                 textAlign = TextAlign.Center,
             )
         }

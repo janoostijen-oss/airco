@@ -166,6 +166,11 @@ class AircoViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearMessage() = _state.update { it.copy(message = null) }
 
+    /** "Alles uit/aan" in het overzicht: elke bereikbare unit die nog niet in die stand staat. */
+    fun setAllPower(on: Boolean) {
+        _state.value.units.filter { it.isConnected && it.power != on }.forEach { setPower(it, on) }
+    }
+
     fun setPower(unit: AircoUnit, on: Boolean) =
         send(unit, mapOf("power" to on)) { it.copy(power = on) }
 
@@ -190,9 +195,15 @@ class AircoViewModel(app: Application) : AndroidViewModel(app) {
     /** +/- knoppen: direct zichtbaar, pas na een korte pauze naar MELCloud (scheelt verzoeken). */
     fun changeTemperature(unit: AircoUnit, direction: Int) {
         val current = _state.value.units.firstOrNull { it.id == unit.id } ?: return
+        setTemperature(unit, current.setTemperature + direction * current.capabilities.step)
+    }
+
+    /** Draaiknop/slepen: exacte waarde, afgerond op de stap van de unit; debounced verstuurd. */
+    fun setTemperature(unit: AircoUnit, value: Double) {
+        val current = _state.value.units.firstOrNull { it.id == unit.id } ?: return
         val range = current.capabilities.rangeFor(current.mode) ?: return
         val step = current.capabilities.step
-        val target = (round((current.setTemperature + direction * step) / step) * step).coerceIn(range)
+        val target = (round(value / step) * step).coerceIn(range)
         if (target == current.setTemperature) return
         patchLocal(unit.id) { it.copy(setTemperature = target) }
 
