@@ -2,7 +2,13 @@
 
 package nl.jan.airco.ui
 
-import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
@@ -49,6 +55,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -100,8 +107,43 @@ fun UnitsScreen(state: UiState, vm: AircoViewModel) {
 
     // null = overzicht "Alle ruimtes"; anders de bedieningspagina van die unit.
     var detailId by rememberSaveable { mutableStateOf<String?>(null) }
-    val detail = state.units.firstOrNull { it.id == detailId }
-    BackHandler(enabled = detail != null) { detailId = null }
+    // De laatst geopende unit blijft op de detaillaag staan, ook tijdens het teruggaan.
+    var shownId by rememberSaveable { mutableStateOf<String?>(null) }
+    if (detailId != null && detailId != shownId) shownId = detailId
+    val detailUnit = state.units.firstOrNull { it.id == shownId } ?: state.units.firstOrNull()
+    val detailScroll = rememberScrollState()
+    val overviewScroll = rememberScrollState()
+
+    /*
+     * Overgang overzicht ⇄ detail, stottervrij:
+     *  - Beide schermen blijven altijd gecomponeerd (detail vooraf "opgewarmd");
+     *    er wordt bij het wisselen niets opgebouwd, alleen verschoven en vervaagd.
+     *  - progress (0 = overzicht, 1 = detail) wordt alleen in graphicsLayer gelezen:
+     *    geen recompositie of layout per frame, alles op de GPU.
+     *  - Material "shared axis X": 30dp schuiven, eerst uitvagen, dan invagen,
+     *    dus nooit twee half-doorzichtige schermen over elkaar.
+     *  - Terug-veeggebaar (Android 14+) scrubt de overgang met je vinger mee.
+     */
+    val progress = remember { Animatable(if (detailId != null) 1f else 0f) }
+    val emphasized = remember { CubicBezierEasing(0.2f, 0f, 0f, 1f) }
+    // Afgebroken terugveeg: deze teller herstart de effect hieronder, die terug naar 1 animeert.
+    var backCancelled by remember { mutableIntStateOf(0) }
+    LaunchedEffect(detailId != null, backCancelled) {
+        if (detailId != null) detailScroll.scrollTo(0)
+        progress.animateTo(if (detailId != null) 1f else 0f, tween(320, easing = emphasized))
+    }
+    PredictiveBackHandler(enabled = detailId != null) { events ->
+        try {
+            events.collect { e -> progress.snapTo(1f - e.progress) }
+            detailId = null // voltooid: de LaunchedEffect animeert vanaf hier naar het overzicht
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            backCancelled++ // terugveeg afgebroken: terugveren naar detail
+            throw e
+        }
+    }
+    val overviewVisible by remember { derivedStateOf { progress.value < 1f } }
+    val detailVisible by remember { derivedStateOf { progress.value > 0f } }
+    val shift = with(LocalDensity.current) { 30.dp.toPx() }
 
     Box(
         Modifier
@@ -124,31 +166,49 @@ fun UnitsScreen(state: UiState, vm: AircoViewModel) {
             onRefresh = { vm.refresh(userInitiated = true) },
             modifier = Modifier.fillMaxSize().safeDrawingPadding(),
         ) {
-            // Eigen scrollpositie per scherm.
-            key(detail == null) {
+            Box(Modifier.fillMaxSize()) {
+                // --- Overzicht
                 Column(
                     Modifier
                         .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
+                        .placedIf(overviewVisible)
+                        .graphicsLayer {
+                            val p = progress.value
+                            translationX = -shift * p
+                            alpha = 1f - (p / 0.35f).coerceIn(0f, 1f)
+                        }
+                        .verticalScroll(overviewScroll)
                         .padding(start = 20.dp, end = 20.dp, top = 22.dp, bottom = 24.dp),
                 ) {
-                    Header(
-                        vm,
-                        title = if (detail == null) "Alle ruimtes" else "Airco",
-                        onBack = if (detail == null) null else ({ detailId = null }),
-                    )
+                    Header(vm, title = "Alle ruimtes", onBack = null)
+                    if (state.units.isEmpty()) {
+                        EmptyState(state, vm)
+                    } else {
+                        Overview(state.units, state.outdoorTemperature, vm, onOpen = { detailId = it })
+                    }
+                }
 
-                    when {
-                        state.units.isEmpty() -> EmptyState(state, vm)
-                        detail == null -> Overview(state.units, state.outdoorTemperature, vm, onOpen = { detailId = it })
-                        else -> {
-                            if (state.units.size > 1) {
-                                Spacer(Modifier.height(18.dp))
-                                RoomSwitcher(state.units, detail.id) { detailId = it }
+                // --- Detail (bovenop)
+                if (detailUnit != null) {
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .placedIf(detailVisible)
+                            .graphicsLayer {
+                                val p = progress.value
+                                translationX = shift * (1f - p)
+                                alpha = ((p - 0.35f) / 0.65f).coerceIn(0f, 1f)
                             }
-                            Spacer(Modifier.height(22.dp))
-                            UnitControls(detail, vm)
+                            .verticalScroll(detailScroll)
+                            .padding(start = 20.dp, end = 20.dp, top = 22.dp, bottom = 24.dp),
+                    ) {
+                        Header(vm, title = "Airco", onBack = { detailId = null })
+                        if (state.units.size > 1) {
+                            Spacer(Modifier.height(18.dp))
+                            RoomSwitcher(state.units, detailUnit.id) { detailId = it }
                         }
+                        Spacer(Modifier.height(22.dp))
+                        UnitControls(detailUnit, vm)
                     }
                 }
             }
@@ -157,6 +217,17 @@ fun UnitsScreen(state: UiState, vm: AircoViewModel) {
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).safeDrawingPadding().padding(16.dp)) {
             Snackbar(it, containerColor = Color(0xFF1C2029), contentColor = Ink.Text)
         }
+    }
+}
+
+/**
+ * Wel meten en gecomponeerd houden, maar alleen plaatsen (tekenen, aanraakbaar)
+ * als [visible]. Zo is een verborgen scherm direct klaar zonder iets te kosten.
+ */
+private fun Modifier.placedIf(visible: Boolean): Modifier = layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints)
+    layout(placeable.width, placeable.height) {
+        if (visible) placeable.place(0, 0)
     }
 }
 
