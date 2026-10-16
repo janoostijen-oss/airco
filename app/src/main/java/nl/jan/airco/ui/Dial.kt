@@ -107,6 +107,7 @@ fun TemperatureDial(
     val latestRange by rememberUpdatedState(range)
     val latestStep by rememberUpdatedState(step)
     val latestFrac by rememberUpdatedState(fracTarget)
+    val latestCurrent by rememberUpdatedState(current)
 
     Box(
         modifier
@@ -229,8 +230,15 @@ fun TemperatureDial(
                             prev = ang
                             value = (value + dd / 270.0 * (r.endInclusive - r.start)).coerceIn(r)
                             val snapped = (round(value / stepSize) * stepSize).coerceIn(r)
-                            if (snapped != dragValue) {
-                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            val before = dragValue
+                            if (snapped != before) {
+                                if (before != null && passesRoom(before, snapped, latestCurrent)) {
+                                    // Doel raakt of passeert de kamertemperatuur (het rode streepje):
+                                    // één stevige klik in plaats van het gewone fijne tikje.
+                                    view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                } else {
+                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                }
                                 dragValue = snapped
                             }
                         }
@@ -427,6 +435,17 @@ fun TemperatureDial(
             }
         }
     }
+}
+
+/**
+ * True als de doeltemperatuur van [from] naar [to] de kamertemperatuur bereikt of
+ * passeert. Eén keer per passage: weer weggaan van precies de kamertemperatuur telt niet.
+ */
+internal fun passesRoom(from: Double, to: Double, room: Double?): Boolean {
+    if (room == null) return false
+    val before = from.compareTo(room).coerceIn(-1, 1)
+    val after = to.compareTo(room).coerceIn(-1, 1)
+    return before != 0 && before != after
 }
 
 // Vaste verlopen van de knop: één keer aanmaken in plaats van bij elke recompositie.
