@@ -2,12 +2,15 @@ package nl.jan.airco.ui
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +23,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,6 +41,8 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
+import android.view.HapticFeedbackConstants
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.Text
@@ -42,8 +50,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.math.floor
-import kotlin.math.hypot
 import kotlin.math.round
 
 /**
@@ -68,52 +77,85 @@ fun TemperatureDial(
     val glowAlpha by animateFloatAsState(if (on) glow else 0f, tween(400), label = "glow")
     val numColor = if (on) Color(0xFFF4F6FA) else Ink.Dim
 
+    // Tijdens slepen toont de knop zijn eigen waarde; pas bij loslaten gaat die naar MELCloud.
+    var dragValue by remember { mutableStateOf<Double?>(null) }
+    val shown = dragValue ?: target
+    val dragging = dragValue != null
+
     val span = (range.endInclusive - range.start).takeIf { it > 0 } ?: 1.0
-    val fracTarget = ((target - range.start) / span).toFloat().coerceIn(0f, 1f)
-    val frac by animateFloatAsState(fracTarget, tween(220), label = "frac")
+    val fracTarget = ((shown - range.start) / span).toFloat().coerceIn(0f, 1f)
+    // Volgt de vinger direct tijdens slepen; animeert bij wijzigingen van buitenaf.
+    val frac by animateFloatAsState(fracTarget, if (dragging) snap() else tween(220), label = "frac")
     val deg = -135f + frac * 270f
+    val grab by animateFloatAsState(if (dragging) 1f else 0f, tween(150), label = "grab")
 
     val haptics = LocalHapticFeedback.current
+    val view = LocalView.current
     val latestTarget by rememberUpdatedState(target)
     val latestOnChange by rememberUpdatedState(onChange)
     val latestRange by rememberUpdatedState(range)
     val latestStep by rememberUpdatedState(step)
+    val latestFrac by rememberUpdatedState(fracTarget)
 
     Box(
         modifier
             .size(320.dp)
-            .semantics { contentDescription = "Doeltemperatuur ${fmtTemp(target)} graden" }
+            .semantics { contentDescription = "Doeltemperatuur ${fmtTemp(shown)} graden" }
             .then(
                 if (!adjustable) Modifier else Modifier.pointerInput(Unit) {
-                    fun handle(pos: Offset) {
-                        val cx = size.width / 2f
-                        val cy = size.height / 2f
-                        val dx = pos.x - cx
-                        val dy = pos.y - cy
-                        if (hypot(dx, dy) < size.width * 0.16f) return
-                        var a = Math.toDegrees(atan2(dx.toDouble(), (-dy).toDouble()))
-                        val r = latestRange
-                        val mid = (r.start + r.endInclusive) / 2
-                        if (a > 135 || a < -135) a = if (latestTarget > mid) 135.0 else -135.0
-                        val raw = r.start + (a + 135) / 270 * (r.endInclusive - r.start)
-                        val snapped = (round(raw / latestStep) * latestStep).coerceIn(r)
-                        if (snapped != latestTarget) {
-                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            latestOnChange(snapped)
-                        }
-                    }
-                    // Zelf consumeren, zodat de pagina niet meescrollt terwijl je draait.
+                    /*
+                     * Alleen de greep is te pakken, en pas na een echte beweging:
+                     *  - Bij aanraken gebeurt niets en wordt niets geconsumeerd, zodat
+                     *    scrollen (en trekken-om-te-vernieuwen) gewoon werkt.
+                     *  - Begint de aanraking niet op de greep (±36dp), dan doet de knop niets.
+                     *  - Op de greep: na de touch slop is hij "gepakt" (tikje), daarna
+                     *    draait hij relatief mee met de hoekverandering — geen sprong
+                     *    naar de vinger.
+                     *  - Loslaten verstuurt de nieuwe waarde; een afgebroken gebaar niet.
+                     */
+                    fun angleOf(p: Offset, c: Offset): Double =
+                        Math.toDegrees(atan2((p.x - c.x).toDouble(), (c.y - p.y).toDouble()))
+
                     awaitEachGesture {
-                        val down = awaitFirstDown()
-                        down.consume()
-                        handle(down.position)
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                            if (!change.pressed) break
-                            handle(change.position)
+                        val down = awaitFirstDown(requireUnconsumed = true)
+                        val c = Offset(size.width / 2f, size.height / 2f)
+                        val unit = size.width / 320f
+                        val a = Math.toRadians(-135.0 + latestFrac * 270.0)
+                        val handle = Offset(
+                            c.x + (128 * unit * sin(a)).toFloat(),
+                            c.y - (128 * unit * cos(a)).toFloat(),
+                        )
+                        if ((down.position - handle).getDistance() > 36.dp.toPx()) return@awaitEachGesture
+
+                        val start = awaitTouchSlopOrCancellation(down.id) { change, _ -> change.consume() }
+                            ?: return@awaitEachGesture
+
+                        view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                        val r = latestRange
+                        val stepSize = latestStep
+                        var value = latestTarget
+                        var prev = angleOf(start.position, c)
+                        dragValue = value
+
+                        val completed = drag(start.id) { change ->
+                            val ang = angleOf(change.position, c)
+                            var d = ang - prev
+                            if (d > 180) d -= 360
+                            if (d < -180) d += 360
+                            prev = ang
+                            value = (value + d / 270.0 * (r.endInclusive - r.start)).coerceIn(r)
+                            val snapped = (round(value / stepSize) * stepSize).coerceIn(r)
+                            if (snapped != dragValue) {
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                dragValue = snapped
+                            }
                             change.consume()
                         }
+
+                        val final = dragValue
+                        // Eerst doorgeven, dan pas de eigen waarde loslaten: geen terugflits.
+                        if (completed && final != null && final != latestTarget) latestOnChange(final)
+                        dragValue = null
                     }
                 },
             ),
@@ -239,7 +281,7 @@ fun TemperatureDial(
                     )
                     Row(verticalAlignment = Alignment.Top) {
                         Text(
-                            if (adjustable) floor(target).toInt().toString() else "—",
+                            if (adjustable) floor(shown).toInt().toString() else "—",
                             fontFamily = Sora,
                             fontWeight = FontWeight.ExtraLight,
                             fontSize = 50.sp,
@@ -249,7 +291,7 @@ fun TemperatureDial(
                         )
                         if (adjustable) {
                             Text(
-                                (if (target % 1.0 != 0.0) ",5" else "") + "°",
+                                (if (shown % 1.0 != 0.0) ",5" else "") + "°",
                                 fontFamily = Sora,
                                 fontWeight = FontWeight.Light,
                                 fontSize = 20.sp,
@@ -277,21 +319,21 @@ fun TemperatureDial(
                 val p = Offset(center.x, center.y - 128 * unit)
                 drawCircle(
                     brush = Brush.radialGradient(
-                        listOf(c2.copy(alpha = 0.55f), Color.Transparent),
+                        listOf(c2.copy(alpha = 0.55f + 0.3f * grab), Color.Transparent),
                         center = p,
-                        radius = 30 * unit,
+                        radius = (30 + 10 * grab) * unit,
                     ),
-                    radius = 30 * unit,
+                    radius = (30 + 10 * grab) * unit,
                     center = p,
                 )
-                drawCircle(c2.copy(alpha = 0.25f), radius = 19 * unit, center = p)
+                drawCircle(c2.copy(alpha = 0.25f + 0.15f * grab), radius = (19 + 4 * grab) * unit, center = p)
                 drawCircle(
                     brush = Brush.radialGradient(
                         listOf(Color.White, Color(0xFFDCE1EA)),
                         center = Offset(p.x - 3 * unit, p.y - 4 * unit),
-                        radius = 16 * unit,
+                        radius = (16 + 4 * grab) * unit,
                     ),
-                    radius = 14 * unit,
+                    radius = (14 + 4 * grab) * unit,
                     center = p,
                 )
             }

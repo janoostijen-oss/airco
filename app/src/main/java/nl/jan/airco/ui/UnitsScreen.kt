@@ -64,6 +64,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -377,7 +378,14 @@ private fun ColumnScope.UnitControls(unit: AircoUnit, vm: AircoViewModel) {
 
     // −/+ in de opening onderaan de knop
     Row(
-        Modifier.width(268.dp).align(Alignment.CenterHorizontally).offset(y = (-58).dp),
+        Modifier
+            .width(268.dp)
+            .align(Alignment.CenterHorizontally)
+            .offset(y = (-58).dp)
+            // Deze rij ligt over de onderkant van de draaiknop. Zelf aanraakdoel zijn
+            // (zonder iets te consumeren) voorkomt dat een tik op het label doorvalt
+            // naar de knop eronder; scrollen blijft gewoon werken.
+            .pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent() } },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         RoundStepButton(Icons.Minus, "Temperatuur omlaag", enabled && range != null && unit.setTemperature > range.start) {
