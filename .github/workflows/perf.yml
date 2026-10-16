@@ -72,6 +72,7 @@ jobs:
                   continue
               mb, mn = st.median(b), st.median(n)
               print(f"::notice::{label}: mediaan basis {mb:.0f}, nieuw {mn:.0f} ({(mn - mb) / mb * 100:+.1f}%), n={len(b)}/{len(n)}")
+              print(f"::notice::{label} ruw — basis {' '.join(f'{x:.0f}' for x in b)} | nieuw {' '.join(f'{x:.0f}' for x in n)}")
               out.append(f"| {label} | {mb:.0f} | {mn:.0f} | {len(b)}/{len(n)} |")
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
               f.write("\n".join(out) + "\n")
