@@ -197,8 +197,8 @@ class AdaptiveScreenTest {
 
     private fun assertVandaag() {
         rule.onNodeWithText("VANDAAG").assertIsDisplayed()
-        rule.onNode(hasText("5,6") and hasAnyAncestor(hasTestTag(TestTags.ENERGY_TODAY))).assertIsDisplayed()
-        rule.onNode(hasText(" kWh") and hasAnyAncestor(hasTestTag(TestTags.ENERGY_TODAY))).assertIsDisplayed()
+        rule.onNode(hasText("5,6") and hasAnyAncestor(hasTestTag(TestTags.ENERGY_TODAY)), useUnmergedTree = true).assertIsDisplayed()
+        rule.onNode(hasText(" kWh") and hasAnyAncestor(hasTestTag(TestTags.ENERGY_TODAY)), useUnmergedTree = true).assertIsDisplayed()
     }
 
     @Test @Config(qualifiers = "w411dp-h891dp")
@@ -216,13 +216,13 @@ class AdaptiveScreenTest {
         rule.onNodeWithTag(TestTags.ENERGY_TODAY).performClick()
         rule.waitForIdle()
         rule.onNodeWithText("GISTEREN").assertIsDisplayed()
-        rule.onNode(hasText("11,0") and hasAnyAncestor(hasTestTag(TestTags.ENERGY_TODAY))).assertIsDisplayed()
+        rule.onNode(hasText("11,0") and hasAnyAncestor(hasTestTag(TestTags.ENERGY_TODAY)), useUnmergedTree = true).assertIsDisplayed()
         assertEquals(1, actions.yesterdayLoads)
 
         rule.onNodeWithTag(TestTags.ENERGY_TODAY).performClick()
         rule.waitForIdle()
         rule.onNodeWithText("VANDAAG").assertIsDisplayed()
-        rule.onNode(hasText("5,6") and hasAnyAncestor(hasTestTag(TestTags.ENERGY_TODAY))).assertIsDisplayed()
+        rule.onNode(hasText("5,6") and hasAnyAncestor(hasTestTag(TestTags.ENERGY_TODAY)), useUnmergedTree = true).assertIsDisplayed()
         assertEquals("terugtikken haalt niets op", 1, actions.yesterdayLoads)
     }
 
@@ -231,7 +231,7 @@ class AdaptiveScreenTest {
         show(UiState(screen = Screen.Units, units = sampleUnits(), energyTodayKwh = 5.63, energyYesterdayLoading = true))
         rule.onNodeWithTag(TestTags.ENERGY_TODAY).performClick()
         rule.waitForIdle()
-        rule.onNode(hasText("…") and hasAnyAncestor(hasTestTag(TestTags.ENERGY_TODAY))).assertIsDisplayed()
+        rule.onNode(hasText("…") and hasAnyAncestor(hasTestTag(TestTags.ENERGY_TODAY)), useUnmergedTree = true).assertIsDisplayed()
     }
 
     @Test @Config(qualifiers = "w411dp-h891dp")
