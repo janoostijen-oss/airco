@@ -367,6 +367,7 @@ private fun ColumnScope.UnitControls(unit: AircoUnit, vm: AircoViewModel) {
     Box(Modifier.fillMaxWidth().padding(top = 8.dp), contentAlignment = Alignment.TopCenter) {
         TemperatureDial(
             target = unit.setTemperature,
+            current = unit.roomTemperature,
             range = range ?: unit.capabilities.heatRange,
             step = unit.capabilities.step,
             on = on,

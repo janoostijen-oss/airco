@@ -64,6 +64,8 @@ import kotlin.math.round
 @Composable
 fun TemperatureDial(
     target: Double,
+    /** Huidige kamertemperatuur; stuurt het streepje op de knop. `null` = verbergen. */
+    current: Double?,
     range: ClosedFloatingPointRange<Double>,
     step: Double,
     on: Boolean,
@@ -89,6 +91,14 @@ fun TemperatureDial(
     // Volgt de vinger direct tijdens slepen; animeert bij wijzigingen van buitenaf.
     val frac by animateFloatAsState(fracTarget, if (dragging) snap() else tween(220), label = "frac")
     val deg = -135f + frac * 270f
+    // Het streepje op de knop toont de kamertemperatuur, op dezelfde schaal als de boog
+    // (buiten het bereik: tegen de rand). Zo zie je in één oogopslag hoe ver doel en kamer uiteen liggen.
+    val currentFrac by animateFloatAsState(
+        current?.let { ((it - range.start) / span).toFloat().coerceIn(0f, 1f) } ?: 0f,
+        tween(400),
+        label = "current",
+    )
+    val currentDeg = -135f + currentFrac * 270f
     val grab by animateFloatAsState(if (dragging || pressed) 1f else 0f, tween(120), label = "grab")
 
     val haptics = LocalHapticFeedback.current
@@ -282,7 +292,12 @@ fun TemperatureDial(
                     .border(1.dp, Ink.white(0.05f), CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
-                Box(Modifier.size(184.dp).rotate(deg)) {
+                if (current != null) Box(
+                    Modifier
+                        .size(184.dp)
+                        .rotate(currentDeg)
+                        .semantics { contentDescription = "Kamertemperatuur ${fmtTemp(current)} graden" },
+                ) {
                     Box(
                         Modifier
                             .align(Alignment.TopCenter)
