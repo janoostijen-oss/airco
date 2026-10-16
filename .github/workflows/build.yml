@@ -26,6 +26,22 @@ jobs:
           set -o pipefail
           ./gradlew :app:testDebugUnitTest --no-daemon 2>&1 | tee test.log
 
+      # Telling per testklasse als notitie in het build-overzicht.
+      - name: Test summary
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          tot = fail = skip = 0
+          for x in sorted(glob.glob("app/build/test-results/testDebugUnitTest/*.xml")):
+              r = ET.parse(x).getroot()
+              t, f, e, s = (int(r.get(k, 0)) for k in ("tests", "failures", "errors", "skipped"))
+              tot += t; fail += f + e; skip += s
+              print(f"::notice::{r.get('name')}: {t} tests, {f + e} mislukt, {s} overgeslagen")
+          print(f"::notice::TOTAAL: {tot} tests, {fail} mislukt, {skip} overgeslagen")
+          PY
+
       - name: Build release APK
         shell: bash
         run: |
