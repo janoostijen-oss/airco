@@ -56,6 +56,18 @@ class EnergyTest {
     }
 
     @Test
+    fun gisterenIsDeHeleVorigeDag() {
+        val zone = ZoneId.of("Europe/Amsterdam")
+        val now = Instant.parse("2026-10-16T15:50:00Z")
+        assertEquals(Instant.parse("2026-10-14T22:00:00Z"), startOfYesterday(now, zone))
+        // Dag van de wintertijd (25 okt 2026): gisteren duurde 25 uur.
+        val naOmschakeling = Instant.parse("2026-10-26T10:00:00Z")
+        val van = startOfYesterday(naOmschakeling, zone)
+        val tot = startOfToday(naOmschakeling, zone)
+        assertEquals(25L * 3600, tot.epochSecond - van.epochSecond)
+    }
+
+    @Test
     fun weergave() {
         assertEquals("5,6", energyLabel(5.63))
         assertEquals("0,0", energyLabel(0.0))

@@ -20,4 +20,6 @@ interface AircoActions {
     fun setFanSpeed(unit: AircoUnit, speed: FanSpeed)
     fun changeTemperature(unit: AircoUnit, direction: Int)
     fun setTemperature(unit: AircoUnit, value: Double)
+    /** Verbruik van gisteren ophalen (eenmalig per dag), voor de tik op "Vandaag". */
+    fun loadEnergyYesterday()
 }

@@ -40,11 +40,14 @@ class AdaptiveScreenTest {
 
     private val actions = FakeActions()
 
-    private fun show() {
+    private fun show(state: UiState = UiState(
+        screen = Screen.Units, units = sampleUnits(), outdoorTemperature = 8.5,
+        energyTodayKwh = 5.63, energyYesterdayKwh = 11.04,
+    )) {
         rule.setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 UnitsScreen(
-                    state = UiState(screen = Screen.Units, units = sampleUnits(), outdoorTemperature = 8.5, energyTodayKwh = 5.63),
+                    state = state,
                     vm = actions,
                 )
             }
@@ -208,6 +211,30 @@ class AdaptiveScreenTest {
     fun tablet_toontVerbruikVandaag() { show(); assertVandaag() }
 
     @Test @Config(qualifiers = "w411dp-h891dp")
+    fun tikOpVandaagToontGisterenEnWeerTerug() {
+        show()
+        rule.onNodeWithTag(TestTags.ENERGY_TODAY).performClick()
+        rule.waitForIdle()
+        rule.onNodeWithText("GISTEREN").assertIsDisplayed()
+        rule.onNode(hasText("11,0") and hasAnyAncestor(hasTestTag(TestTags.ENERGY_TODAY))).assertIsDisplayed()
+        assertEquals(1, actions.yesterdayLoads)
+
+        rule.onNodeWithTag(TestTags.ENERGY_TODAY).performClick()
+        rule.waitForIdle()
+        rule.onNodeWithText("VANDAAG").assertIsDisplayed()
+        rule.onNode(hasText("5,6") and hasAnyAncestor(hasTestTag(TestTags.ENERGY_TODAY))).assertIsDisplayed()
+        assertEquals("terugtikken haalt niets op", 1, actions.yesterdayLoads)
+    }
+
+    @Test @Config(qualifiers = "w1280dp-h800dp-land")
+    fun gisterenLadenToontPuntjes() {
+        show(UiState(screen = Screen.Units, units = sampleUnits(), energyTodayKwh = 5.63, energyYesterdayLoading = true))
+        rule.onNodeWithTag(TestTags.ENERGY_TODAY).performClick()
+        rule.waitForIdle()
+        rule.onNode(hasText("…") and hasAnyAncestor(hasTestTag(TestTags.ENERGY_TODAY))).assertIsDisplayed()
+    }
+
+    @Test @Config(qualifiers = "w411dp-h891dp")
     fun vandaagStaatTussenBuitenEnActief() {
         show()
         val buiten = rule.onNodeWithText("BUITEN").fetchSemanticsNode().boundsInRoot
@@ -242,6 +269,8 @@ private class FakeActions : AircoActions {
     override fun setFanSpeed(unit: AircoUnit, speed: FanSpeed) {}
     override fun changeTemperature(unit: AircoUnit, direction: Int) { tempSteps += unit.id to direction }
     override fun setTemperature(unit: AircoUnit, value: Double) {}
+    var yesterdayLoads = 0
+    override fun loadEnergyYesterday() { yesterdayLoads++ }
 }
 
 private fun sampleUnits(): List<AircoUnit> {

@@ -962,7 +962,7 @@ private fun EmptyState(state: UiState, vm: AircoActions) {
 private fun Overview(state: UiState, vm: AircoActions, onOpen: (String) -> Unit) {
     val units = state.units
     Spacer(Modifier.height(18.dp))
-    SummaryCard(units, state.outdoorTemperature, state.energyTodayKwh, vm, SummarySize.Phone)
+    SummaryCard(state, vm, SummarySize.Phone)
     Spacer(Modifier.height(16.dp))
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         units.forEach { u -> key(u.id) { RoomOverviewCard(u, vm, onOpen = { onOpen(u.id) }) } }
@@ -984,13 +984,9 @@ internal enum class SummarySize(
  * daaronder "Alles uit/aan" over de volle breedte.
  */
 @Composable
-private fun SummaryCard(
-    units: List<AircoUnit>,
-    outdoorTemperature: Double?,
-    energyTodayKwh: Double?,
-    vm: AircoActions,
-    size: SummarySize,
-) {
+private fun SummaryCard(state: UiState, vm: AircoActions, size: SummarySize) {
+    val units = state.units
+    val outdoorTemperature = state.outdoorTemperature
     val onCount = units.count { it.power }
     val shape = RoundedCornerShape(size.corner.dp)
     Column(
@@ -1013,10 +1009,7 @@ private fun SummaryCard(
                 StatValue("${outdoorLabel(outdoorTemperature)}°", null, size.value, size.unit)
             }
             StatDivider(size)
-            SummaryStat("Vandaag", size, Modifier.weight(1f).testTag(TestTags.ENERGY_TODAY)) {
-                val kwh = energyLabel(energyTodayKwh)
-                StatValue(kwh, if (energyTodayKwh != null) " kWh" else null, size.value, size.kwhUnit)
-            }
+            EnergyStat(state, vm, size, Modifier.weight(1f))
             StatDivider(size)
             SummaryStat("Actief", size, Modifier.weight(1f)) {
                 StatValue("$onCount", " / ${units.size}", size.value, size.unit)
@@ -1030,6 +1023,39 @@ private fun SummaryCard(
             iconSize = size.icon.dp,
             arrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
         )
+    }
+}
+
+/**
+ * "Vandaag" — tik om te wisselen naar "Gisteren" (hele vorige dag), nog eens
+ * tikken voor terug. Gisteren wordt pas bij de eerste tik opgehaald.
+ */
+@Composable
+private fun EnergyStat(state: UiState, vm: AircoActions, size: SummarySize, modifier: Modifier) {
+    var yesterday by rememberSaveable { mutableStateOf(false) }
+    val view = LocalView.current
+    val kwh = if (yesterday) state.energyYesterdayKwh else state.energyTodayKwh
+    val text = when {
+        yesterday && kwh == null && state.energyYesterdayLoading -> "…"
+        else -> energyLabel(kwh)
+    }
+    SummaryStat(
+        if (yesterday) "Gisteren" else "Vandaag",
+        size,
+        modifier
+            .testTag(TestTags.ENERGY_TODAY)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null, // geen vlak; het wisselen van kopje en getal is de feedback
+                role = Role.Button,
+                onClickLabel = if (yesterday) "Toon vandaag" else "Toon gisteren",
+            ) {
+                view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                if (!yesterday) vm.loadEnergyYesterday()
+                yesterday = !yesterday
+            },
+    ) {
+        StatValue(text, if (kwh != null) " kWh" else null, size.value, size.kwhUnit)
     }
 }
 
@@ -1342,13 +1368,7 @@ private fun TwoPane(
                 EmptyState(state, vm)
             } else {
                 Spacer(Modifier.height(if (wide) 18.dp else 16.dp))
-                SummaryCard(
-                    state.units,
-                    state.outdoorTemperature,
-                    state.energyTodayKwh,
-                    vm,
-                    if (wide) SummarySize.Tablet else SummarySize.Foldable,
-                )
+                SummaryCard(state, vm, if (wide) SummarySize.Tablet else SummarySize.Foldable)
                 Spacer(Modifier.height(if (wide) 18.dp else 16.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(if (wide) 10.dp else 8.dp)) {
                     state.units.forEach { u ->

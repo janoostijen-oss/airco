@@ -47,6 +47,9 @@ data class UiState(
     val outdoorTemperature: Double? = null,
     /** Totaal stroomverbruik vandaag (kWh) van alle units die meten; `null` = onbekend. */
     val energyTodayKwh: Double? = null,
+    /** Totaal verbruik gisteren (hele dag, kWh); `null` = (nog) onbekend. */
+    val energyYesterdayKwh: Double? = null,
+    val energyYesterdayLoading: Boolean = false,
     /** Reserve-route: alleen aangeboden als het formulier-inloggen technisch faalt. */
     val webLoginOffered: Boolean = false,
     val showWebLogin: Boolean = false,
@@ -75,6 +78,10 @@ internal fun combineEnergy(perUnit: List<Pair<Boolean?, Double?>>): Double? {
 /** Begin van vandaag (lokale middernacht) als tijdstip. */
 internal fun startOfToday(now: Instant, zone: ZoneId): Instant =
     now.atZone(zone).toLocalDate().atStartOfDay(zone).toInstant()
+
+/** Begin van gisteren (lokale middernacht); gisteren loopt tot [startOfToday]. Klopt ook rond zomer-/wintertijd. */
+internal fun startOfYesterday(now: Instant, zone: ZoneId): Instant =
+    now.atZone(zone).toLocalDate().minusDays(1).atStartOfDay(zone).toInstant()
 
 internal fun outdoorGroups(units: List<AircoUnit>): List<List<String>> =
     units.groupBy({ it.systemId ?: it.id }, { it.id }).values.toList()
@@ -224,27 +231,68 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
             return
         }
         energyJob = viewModelScope.launch {
-            val from = startOfToday(now, zone)
-            val results = coroutineScope {
-                units.map { u ->
-                    async {
-                        val kwh = try {
-                            api.energyKwh(u.id, from, now.plusSeconds(60))
-                        } catch (e: Exception) {
-                            if (e is kotlinx.coroutines.CancellationException) throw e
-                            return@async null // mislukt: deze ronde niet meetellen
-                        }
-                        u.capabilities.hasEnergyMeter to kwh
-                    }
-                }.awaitAll()
-            }
+            val total = energyTotal(units, startOfToday(now, zone), now.plusSeconds(60))
             // Alleen bijwerken als het ophalen voor elke unit lukte; anders de vorige waarde houden.
-            if (results.all { it != null }) {
+            if (total != null) {
                 energyFetchedAt = System.currentTimeMillis()
                 energyDay = today
-                _state.update { it.copy(energyTodayKwh = combineEnergy(results.filterNotNull())) }
+                _state.update { it.copy(energyTodayKwh = total.value) }
             } else if (newDay) {
                 _state.update { it.copy(energyTodayKwh = null) } // gisteren niet als vandaag tonen
+            }
+            // Nieuwe dag: het bewaarde "gisteren" hoort nu bij eergisteren.
+            if (newDay && yesterdayDay != null && yesterdayDay != today) {
+                yesterdayDay = null
+                _state.update { it.copy(energyYesterdayKwh = null) }
+            }
+        }
+    }
+
+    /** Uitkomst van één optelling; `null` als het ophalen bij een unit mislukte. */
+    private class EnergyTotal(val value: Double?)
+
+    private suspend fun energyTotal(units: List<AircoUnit>, from: Instant, to: Instant): EnergyTotal? {
+        val results = coroutineScope {
+            units.map { u ->
+                async {
+                    val kwh = try {
+                        api.energyKwh(u.id, from, to)
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        return@async null // mislukt: deze ronde niet meetellen
+                    }
+                    u.capabilities.hasEnergyMeter to kwh
+                }
+            }.awaitAll()
+        }
+        return if (results.all { it != null }) EnergyTotal(combineEnergy(results.filterNotNull())) else null
+    }
+
+    /** Dag waarvoor [UiState.energyYesterdayKwh] geldt als "gisteren" (= de dag van vandaag). */
+    private var yesterdayDay: LocalDate? = null
+    private var yesterdayJob: Job? = null
+
+    /**
+     * Gisteren is een afgesloten dag: één keer per dag ophalen en bewaren.
+     * Pas bij de eerste tik, zodat wie nooit tikt ook geen extra verzoeken kost.
+     */
+    override fun loadEnergyYesterday() {
+        val zone = ZoneId.systemDefault()
+        val now = Instant.now()
+        val today = now.atZone(zone).toLocalDate()
+        if (yesterdayDay == today) return // al opgehaald vandaag
+        if (yesterdayJob?.isActive == true) return
+        val units = _state.value.units.filter { it.capabilities.hasEnergyMeter != false }
+        if (units.isEmpty()) return
+        yesterdayJob = viewModelScope.launch {
+            _state.update { it.copy(energyYesterdayLoading = true) }
+            val total = energyTotal(units, startOfYesterday(now, zone), startOfToday(now, zone))
+            if (total != null) yesterdayDay = today
+            _state.update {
+                it.copy(
+                    energyYesterdayLoading = false,
+                    energyYesterdayKwh = if (total != null) total.value else it.energyYesterdayKwh,
+                )
             }
         }
     }
