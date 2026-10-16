@@ -39,6 +39,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
@@ -79,6 +80,7 @@ fun TemperatureDial(
 
     // Tijdens slepen toont de knop zijn eigen waarde; pas bij loslaten gaat die naar MELCloud.
     var dragValue by remember { mutableStateOf<Double?>(null) }
+    var pressed by remember { mutableStateOf(false) }
     val shown = dragValue ?: target
     val dragging = dragValue != null
 
@@ -87,7 +89,7 @@ fun TemperatureDial(
     // Volgt de vinger direct tijdens slepen; animeert bij wijzigingen van buitenaf.
     val frac by animateFloatAsState(fracTarget, if (dragging) snap() else tween(220), label = "frac")
     val deg = -135f + frac * 270f
-    val grab by animateFloatAsState(if (dragging) 1f else 0f, tween(150), label = "grab")
+    val grab by animateFloatAsState(if (dragging || pressed) 1f else 0f, tween(120), label = "grab")
 
     val haptics = LocalHapticFeedback.current
     val view = LocalView.current
@@ -117,28 +119,49 @@ fun TemperatureDial(
                         Math.toDegrees(atan2((p.x - c.x).toDouble(), (c.y - p.y).toDouble()))
 
                     awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = true)
+                        // requireUnconsumed = false: een net uitlopende scroll mag de eerste
+                        // aanraking "opeten" om de fling te stoppen; de greep moet dan toch reageren.
+                        val down = awaitFirstDown(requireUnconsumed = false)
                         val c = Offset(size.width / 2f, size.height / 2f)
                         val unit = size.width / 320f
-                        val a = Math.toRadians(-135.0 + latestFrac * 270.0)
+                        val handleDeg = -135.0 + latestFrac * 270.0
+                        val a = Math.toRadians(handleDeg)
                         val handle = Offset(
                             c.x + (128 * unit * sin(a)).toFloat(),
                             c.y - (128 * unit * cos(a)).toFloat(),
                         )
-                        if ((down.position - handle).getDistance() > 36.dp.toPx()) return@awaitEachGesture
+                        // Grijpzone: ruime cirkel om de greep, plus een stuk ring
+                        // (±22° langs de boog) zodat je hem niet exact hoeft te raken.
+                        val r0 = (down.position - c).getDistance()
+                        var dAng = angleOf(down.position, c) - handleDeg
+                        if (dAng > 180) dAng -= 360
+                        if (dAng < -180) dAng += 360
+                        val onHandle = (down.position - handle).getDistance() <= 44.dp.toPx() ||
+                            (r0 in (90 * unit)..(172 * unit) && kotlin.math.abs(dAng) <= 22)
+                        if (!onHandle) return@awaitEachGesture
 
-                        val start = awaitTouchSlopOrCancellation(down.id) { change, _ -> change.consume() }
-                            ?: return@awaitEachGesture
+                        // Direct zichtbaar "aangeraakt": de greep licht op.
+                        pressed = true
+                        try {
+                        var committed: PointerInputChange? = null
+                        var cancelled = false
+                        // Pakken bij beweging (touch slop) óf na kort vasthouden (120 ms).
+                        withTimeoutOrNull(120) {
+                            val ch = awaitTouchSlopOrCancellation(down.id) { change, _ -> change.consume() }
+                            if (ch == null) cancelled = true else committed = ch
+                        }
+                        if (cancelled) return@awaitEachGesture
 
                         view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                         val r = latestRange
                         val stepSize = latestStep
                         var value = latestTarget
-                        var prev = angleOf(start.position, c)
+                        // Rekenen vanaf het aanraakpunt, zodat ook de eerste millimeters tellen.
+                        var prev = angleOf(down.position, c)
                         dragValue = value
 
-                        val completed = drag(start.id) { change ->
-                            val ang = angleOf(change.position, c)
+                        fun follow(pos: Offset) {
+                            val ang = angleOf(pos, c)
                             var d = ang - prev
                             if (d > 180) d -= 360
                             if (d < -180) d += 360
@@ -149,13 +172,22 @@ fun TemperatureDial(
                                 haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 dragValue = snapped
                             }
+                        }
+                        committed?.let { follow(it.position) }
+
+                        val completed = drag(down.id) { change ->
+                            follow(change.position)
                             change.consume()
                         }
 
                         val final = dragValue
                         // Eerst doorgeven, dan pas de eigen waarde loslaten: geen terugflits.
                         if (completed && final != null && final != latestTarget) latestOnChange(final)
-                        dragValue = null
+                        } finally {
+                            // Ook bij een onderbroken gebaar: greep nooit laten "hangen".
+                            dragValue = null
+                            pressed = false
+                        }
                     }
                 },
             ),

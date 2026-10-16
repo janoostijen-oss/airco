@@ -382,10 +382,7 @@ private fun ColumnScope.UnitControls(unit: AircoUnit, vm: AircoViewModel) {
             .width(268.dp)
             .align(Alignment.CenterHorizontally)
             .offset(y = (-58).dp)
-            // Deze rij ligt over de onderkant van de draaiknop. Zelf aanraakdoel zijn
-            // (zonder iets te consumeren) voorkomt dat een tik op het label doorvalt
-            // naar de knop eronder; scrollen blijft gewoon werken.
-            .pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent() } },
+
         verticalAlignment = Alignment.CenterVertically,
     ) {
         RoundStepButton(Icons.Minus, "Temperatuur omlaag", enabled && range != null && unit.setTemperature > range.start) {
@@ -398,7 +395,12 @@ private fun ColumnScope.UnitControls(unit: AircoUnit, vm: AircoViewModel) {
             fontSize = 11.sp,
             letterSpacing = 0.9.sp,
             color = Ink.Faint,
-            modifier = Modifier.weight(1f),
+            // Het label ligt over de onderkant van de draaiknop: zelf aanraakdoel zijn
+            // (zonder te consumeren) zodat een tik hier niet doorvalt naar de knop.
+            // Alleen het label, niet de hele rij, zodat de greep bij min/max pakbaar blijft.
+            modifier = Modifier
+                .weight(1f)
+                .pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent() } },
             textAlign = androidx.compose.ui.text.style.TextAlign.Center,
         )
         RoundStepButton(Icons.Plus, "Temperatuur omhoog", enabled && range != null && unit.setTemperature < range.endInclusive) {
