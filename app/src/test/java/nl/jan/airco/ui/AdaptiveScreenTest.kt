@@ -240,8 +240,8 @@ class AdaptiveScreenTest {
     fun telefoon_trendpijltjeNaBuitentemperatuur() {
         show()
         rule.onNodeWithContentDescription("Buiten kouder dan een half uur geleden").assertIsDisplayed()
-        val temp = rule.onNodeWithText("8,5°").fetchSemanticsNode().boundsInRoot
-        val arrows = rule.onNodeWithTag(TestTags.OUTDOOR_TREND).fetchSemanticsNode().boundsInRoot
+        val temp = rule.onNodeWithText("8,5°", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val arrows = rule.onNodeWithTag(TestTags.OUTDOOR_TREND, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
         assertTrue("pijltjes staan rechts van de temperatuur", arrows.left >= temp.right)
     }
 
@@ -260,7 +260,53 @@ class AdaptiveScreenTest {
     @Test @Config(qualifiers = "w411dp-h891dp")
     fun geenPijltjesZonderBuitentemperatuur() {
         show(UiState(screen = Screen.Units, units = sampleUnits()))
-        rule.onNodeWithTag(TestTags.OUTDOOR_TREND).assertDoesNotExist()
+        rule.onNodeWithTag(TestTags.OUTDOOR_TREND, useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    // --------------------------------------------------------------- buiten nu / max / min
+
+    private fun extremesState() = UiState(
+        screen = Screen.Units, units = sampleUnits(), outdoorTemperature = 8.5, outdoorTrend = -1,
+        outdoorMaxToday = 12.5, outdoorMinToday = -4.5,
+    )
+
+    private fun tapBuitenEnCheck(label: String, second: String?, value: String, arrows: Boolean) {
+        rule.onNode(hasText(label) and hasAnyAncestor(hasTestTag(TestTags.OUTDOOR)), useUnmergedTree = true).assertIsDisplayed()
+        if (second != null) {
+            rule.onNode(hasText(second) and hasAnyAncestor(hasTestTag(TestTags.OUTDOOR)), useUnmergedTree = true).assertIsDisplayed()
+        }
+        rule.onNode(hasText(value) and hasAnyAncestor(hasTestTag(TestTags.OUTDOOR)), useUnmergedTree = true).assertIsDisplayed()
+        val n = rule.onAllNodes(hasTestTag(TestTags.OUTDOOR_TREND), useUnmergedTree = true).fetchSemanticsNodes().size
+        assertEquals("pijltjes bij $label", if (arrows) 1 else 0, n)
+    }
+
+    private fun cycleBuiten() {
+        tapBuitenEnCheck("BUITEN NU", null, "8,5°", arrows = true)
+        rule.onNodeWithTag(TestTags.OUTDOOR).performClick(); rule.waitForIdle()
+        tapBuitenEnCheck("MAX BUITEN", "VANDAAG", "12,5°", arrows = false)
+        rule.onNodeWithTag(TestTags.OUTDOOR).performClick(); rule.waitForIdle()
+        tapBuitenEnCheck("MIN BUITEN", "VANDAAG", "-4,5°", arrows = false)
+        rule.onNodeWithTag(TestTags.OUTDOOR).performClick(); rule.waitForIdle()
+        tapBuitenEnCheck("BUITEN NU", null, "8,5°", arrows = true)
+    }
+
+    @Test @Config(qualifiers = "w411dp-h891dp")
+    fun telefoon_tikOpBuitenWisseltNuMaxMin() { show(extremesState()); cycleBuiten() }
+
+    @Test @Config(qualifiers = "w600dp-h800dp")
+    fun smalleFoldable_tikOpBuitenWisseltNuMaxMin() { show(extremesState()); cycleBuiten() }
+
+    @Test @Config(qualifiers = "w1280dp-h800dp-land")
+    fun tablet_tikOpBuitenWisseltNuMaxMin() { show(extremesState()); cycleBuiten() }
+
+    @Test @Config(qualifiers = "w411dp-h891dp")
+    fun getallenBlijvenOpEenLijnBijTweeRegels() {
+        show(extremesState())
+        rule.onNodeWithTag(TestTags.OUTDOOR).performClick(); rule.waitForIdle()
+        val buiten = rule.onNodeWithText("12,5°", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val vandaag = rule.onNode(hasText("–") and hasAnyAncestor(hasTestTag(TestTags.ENERGY_TODAY)), useUnmergedTree = true)
+            .fetchSemanticsNode().boundsInRoot
+        assertEquals("waarden op één lijn", buiten.top, vandaag.top, 1f)
     }
 
     // --------------------------------------------------------------- op temperatuur
@@ -299,9 +345,9 @@ class AdaptiveScreenTest {
     @Test @Config(qualifiers = "w411dp-h891dp")
     fun vandaagStaatTussenBuitenEnActief() {
         show()
-        val buiten = rule.onNodeWithText("BUITEN").fetchSemanticsNode().boundsInRoot
-        val vandaag = rule.onNodeWithText("VANDAAG").fetchSemanticsNode().boundsInRoot
-        val actief = rule.onNodeWithText("ACTIEF").fetchSemanticsNode().boundsInRoot
+        val buiten = rule.onNodeWithText("BUITEN NU", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val vandaag = rule.onNodeWithText("VANDAAG", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val actief = rule.onNodeWithText("ACTIEF", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
         assertTrue(
             "volgorde: buiten=$buiten vandaag=$vandaag actief=$actief",
             buiten.center.x < vandaag.center.x && vandaag.center.x < actief.center.x,

@@ -25,6 +25,7 @@ import nl.jan.airco.data.NotLoggedInException
 import nl.jan.airco.data.RateLimitedException
 import nl.jan.airco.data.TokenStore
 import nl.jan.airco.data.outdoorTrend
+import nl.jan.airco.data.outdoorExtremes
 import nl.jan.airco.data.AtTargetTracker
 import java.time.Instant
 import java.time.LocalDate
@@ -49,6 +50,9 @@ data class UiState(
     val outdoorTemperature: Double? = null,
     /** Buitentemperatuur t.o.v. een half uur geleden: 1 warmer, -1 kouder, 0 gelijk, `null` onbekend. */
     val outdoorTrend: Int? = null,
+    /** Hoogste / laagste buitentemperatuur vandaag (gemiddeld over buitenunits). */
+    val outdoorMaxToday: Double? = null,
+    val outdoorMinToday: Double? = null,
     /** Units die "op temperatuur" zijn (huidig = doel), zie [nl.jan.airco.data.AtTargetTracker]. */
     val atTarget: Set<String> = emptySet(),
     /** Totaal stroomverbruik vandaag (kWh) van alle units die meten; `null` = onbekend. */
@@ -203,10 +207,13 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
             if (series.isNotEmpty()) {
                 outdoorFetchedAt = System.currentTimeMillis()
                 val now = Instant.now()
+                val extremes = outdoorExtremes(series, startOfToday(now, ZoneId.systemDefault()))
                 _state.update {
                     it.copy(
                         outdoorTemperature = series.map { s -> s.last().value }.average(),
                         outdoorTrend = outdoorTrend(series, now),
+                        outdoorMaxToday = extremes?.first,
+                        outdoorMinToday = extremes?.second,
                     )
                 }
             }

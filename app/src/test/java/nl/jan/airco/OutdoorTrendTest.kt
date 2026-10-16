@@ -4,6 +4,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import nl.jan.airco.data.Reading
 import nl.jan.airco.data.ReportParser
 import nl.jan.airco.data.outdoorTrend
+import nl.jan.airco.data.outdoorExtremes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -73,5 +74,27 @@ class OutdoorTrendTest {
     fun geenMetingSentinelWordtGenegeerd() {
         val body = """{"datasets":[],"previousTriggers":[{"measure":"outside_temperature","trigger":"9999-12-31T23:59:59","value":5.0}]}"""
         assertEquals(emptyList<Reading>(), ReportParser.outdoorSeries(body))
+    }
+
+    @Test
+    fun maxEnMinVandaag() {
+        val middernacht = Instant.parse("2026-10-15T22:00:00Z")
+        val s = listOf(
+            r("2026-10-15T20:00:00Z", 15.0), // gisteren, telt niet
+            r("2026-10-15T21:30:00Z", 9.0),  // stand op middernacht
+            r("2026-10-16T05:00:00Z", 4.0),
+            r("2026-10-16T13:00:00Z", 12.5),
+            r("2026-10-16T17:40:00Z", 8.5),
+        )
+        assertEquals(12.5 to 4.0, outdoorExtremes(listOf(s), middernacht))
+    }
+
+    @Test
+    fun maxEnMinGemiddeldOverBuitenunits() {
+        val middernacht = Instant.parse("2026-10-15T22:00:00Z")
+        val a = listOf(r("2026-10-16T05:00:00Z", 4.0), r("2026-10-16T13:00:00Z", 12.0))
+        val b = listOf(r("2026-10-16T05:00:00Z", 6.0), r("2026-10-16T13:00:00Z", 14.0))
+        assertEquals(13.0 to 5.0, outdoorExtremes(listOf(a, b), middernacht))
+        assertNull(outdoorExtremes(emptyList(), middernacht))
     }
 }

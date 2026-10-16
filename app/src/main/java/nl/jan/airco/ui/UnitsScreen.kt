@@ -1000,9 +1000,11 @@ internal enum class SummarySize(
     val padStart: Int, val corner: Int, val button: Int, val buttonCorner: Int, val icon: Int,
     /** Trendpijltjes achter de buitentemperatuur: breedte, hoogte, afstand tot het getal. */
     val arrowW: Int, val arrowH: Int, val arrowGap: Int,
+    /** Breedte-aandeel van de Buiten-kolom ("MAX BUITEN" moet op één regel passen). */
+    val outdoorWeight: Float = 1f,
 ) {
     Phone(11, 26, 15, 15, 40, 14, 18, 22, 46, 15, 15, 8, 5, 6),
-    Foldable(10, 20, 12, 11, 34, 8, 16, 20, 44, 14, 14, 7, 4, 5),
+    Foldable(10, 20, 12, 11, 34, 8, 16, 20, 44, 14, 14, 7, 4, 5, 1.05f),
     Tablet(11, 24, 14, 14, 38, 14, 18, 22, 46, 15, 15, 8, 5, 6),
 }
 
@@ -1032,15 +1034,7 @@ private fun SummaryCard(state: UiState, vm: AircoActions, size: SummarySize) {
             verticalAlignment = Alignment.Top,
             horizontalArrangement = Arrangement.spacedBy(size.gap.dp),
         ) {
-            SummaryStat("Buiten", size, Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    StatValue("${outdoorLabel(outdoorTemperature)}°", null, size.value, size.unit)
-                    if (outdoorTemperature != null) {
-                        Spacer(Modifier.width(size.arrowGap.dp))
-                        TrendArrows(state.outdoorTrend, size)
-                    }
-                }
-            }
+            OutdoorStat(state, size, Modifier.weight(size.outdoorWeight))
             StatDivider(size)
             EnergyStat(state, vm, size, Modifier.weight(1f))
             StatDivider(size)
@@ -1221,18 +1215,77 @@ private fun AllPowerButton(
 private val AllPowerBrush = Brush.linearGradient(listOf(Color(0xFF262B36), Color(0xFF161920)))
 
 @Composable
-private fun SummaryStat(label: String, size: SummarySize, modifier: Modifier, value: @Composable () -> Unit) {
+private fun SummaryStat(
+    label: String,
+    size: SummarySize,
+    modifier: Modifier,
+    secondLine: String? = null,
+    value: @Composable () -> Unit,
+) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(
-            label.uppercase(),
+        // Kopjes reserveren altijd twee regels en staan onderaan: zo blijven de grote
+        // getallen op één lijn, ook als "Max buiten / vandaag" twee regels nodig heeft.
+        val lineHeight = (size.label * 1.35f).sp
+        val labelStyle = androidx.compose.ui.text.TextStyle(
             fontFamily = Manrope,
             fontWeight = FontWeight.Bold,
             fontSize = size.label.sp,
-            letterSpacing = 1.5.sp,
+            letterSpacing = (size.label * 0.1f).sp,
+            lineHeight = lineHeight,
             color = Ink.Muted,
-            maxLines = 1,
         )
+        val twoLines = with(LocalDensity.current) { (lineHeight * 2).toDp() }
+        Column(Modifier.heightIn(min = twoLines), verticalArrangement = Arrangement.Bottom) {
+            Text(label.uppercase(), style = labelStyle, maxLines = 1, softWrap = false)
+            if (secondLine != null) Text(secondLine.uppercase(), style = labelStyle, maxLines = 1, softWrap = false)
+        }
         value()
+    }
+}
+
+/**
+ * Buiten: tik om te wisselen tussen nu → hoogste vandaag → laagste vandaag → nu.
+ * De trendpijltjes horen bij "nu" en staan alleen daar.
+ */
+@Composable
+private fun OutdoorStat(state: UiState, size: SummarySize, modifier: Modifier) {
+    var view by rememberSaveable { mutableIntStateOf(0) } // 0 = nu, 1 = max, 2 = min
+    val haptic = LocalView.current
+    val value = when (view) {
+        1 -> state.outdoorMaxToday
+        2 -> state.outdoorMinToday
+        else -> state.outdoorTemperature
+    }
+    val text = "${outdoorLabel(value)}°"
+    val description = when (view) {
+        1 -> "Hoogste buitentemperatuur vandaag ${outdoorLabel(value)} graden. Tik voor de laagste"
+        2 -> "Laagste buitentemperatuur vandaag ${outdoorLabel(value)} graden. Tik voor nu"
+        else -> "Buiten nu ${outdoorLabel(value)} graden. Tik voor de hoogste van vandaag"
+    }
+    SummaryStat(
+        label = when (view) { 1 -> "Max buiten"; 2 -> "Min buiten"; else -> "Buiten nu" },
+        secondLine = if (view == 0) null else "vandaag",
+        size = size,
+        modifier = modifier
+            .testTag(TestTags.OUTDOOR)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                role = Role.Button,
+                onClickLabel = "Wissel tussen nu, hoogste en laagste",
+            ) {
+                haptic.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                view = (view + 1) % 3
+            }
+            .semantics(mergeDescendants = true) { contentDescription = description },
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            StatValue(text, null, size.value, size.unit)
+            if (view == 0 && state.outdoorTemperature != null) {
+                Spacer(Modifier.width(size.arrowGap.dp))
+                TrendArrows(state.outdoorTrend, size)
+            }
+        }
     }
 }
 

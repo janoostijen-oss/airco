@@ -263,6 +263,21 @@ object ReportParser {
 fun List<Reading>.valueAt(at: Instant): Double? = lastOrNull { !it.time.isAfter(at) }?.value
 
 /**
+ * Hoogste en laagste buitentemperatuur sinds [from] (lokale middernacht),
+ * gemiddeld over de buitenunits. De temperatuur óp middernacht (laatste meting
+ * daarvoor) telt mee. `null` als er niets bekend is.
+ */
+fun outdoorExtremes(perOutdoorUnit: List<List<Reading>>, from: Instant): Pair<Double, Double>? {
+    val perUnit = perOutdoorUnit.mapNotNull { series ->
+        val values = series.filter { !it.time.isBefore(from) }.map { it.value } +
+            listOfNotNull(series.valueAt(from))
+        if (values.isEmpty()) null else values.max() to values.min()
+    }
+    if (perUnit.isEmpty()) return null
+    return perUnit.map { it.first }.average() to perUnit.map { it.second }.average()
+}
+
+/**
  * Trend van de buitentemperatuur: gemiddelde nu tegenover [ago] geleden, over de
  * buitenunits die op beide momenten een meting hebben. 1 = warmer, -1 = kouder,
  * 0 = gelijk (verschil < [threshold]), `null` = te weinig data.

@@ -28,5 +28,6 @@ object TestTags {
     const val CURRENT_TEMP = "current-temp"
     const val ENERGY_TODAY = "energy-today"
     const val OUTDOOR_TREND = "outdoor-trend"
+    const val OUTDOOR = "outdoor"
     fun roomRow(id: String) = "room-row-$id"
 }
