@@ -9,7 +9,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.awaitTouchSlopOrCancellation
 import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -39,10 +38,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
+import android.os.SystemClock
 import android.view.HapticFeedbackConstants
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -146,44 +145,96 @@ fun TemperatureDial(
                         var dAng = angleOf(down.position, c) - handleDeg
                         if (dAng > 180) dAng -= 360
                         if (dAng < -180) dAng += 360
-                        val onHandle = (down.position - handle).getDistance() <= 44.dp.toPx() ||
-                            (r0 in (90 * unit)..(172 * unit) && kotlin.math.abs(dAng) <= 22)
+                        val distToHandle = (down.position - handle).getDistance()
+                        // Grijpzone: cirkel van 40dp om de greep, plus een smalle strook ring
+                        // (±12° langs de boog). Smaller dan v2.5, dat te veel scrolls ving.
+                        val onHandle = distToHandle <= 40.dp.toPx() ||
+                            (r0 in (100 * unit)..(165 * unit) && kotlin.math.abs(dAng) <= 12)
                         if (!onHandle) return@awaitEachGesture
+                        val precise = distToHandle <= 28.dp.toPx()
 
                         // Direct zichtbaar "aangeraakt": de greep licht op.
                         pressed = true
                         try {
-                        var committed: PointerInputChange? = null
-                        var cancelled = false
-                        // Pakken bij beweging (touch slop) óf na kort vasthouden (120 ms).
-                        withTimeoutOrNull(120) {
-                            val ch = awaitTouchSlopOrCancellation(down.id) { change, _ -> change.consume() }
-                            if (ch == null) cancelled = true else committed = ch
+                        /*
+                         * Beslissen: draaien of scrollen. Tot dat moment consumeren we NIETS,
+                         * zodat de pagina-scroll kan winnen. We beslissen altijd vóór de
+                         * scroll zijn eigen drempel (touch slop) haalt.
+                         *  - Beweging langs de boog (horizontaal/diagonaal): pakken na ±5dp.
+                         *  - Steil verticale beweging = scrollgebaar: alleen pakken als je
+                         *    precies op de greep begon, langzaam beweegt én echt langs de boog
+                         *    gaat (op 3/9 uur loopt de boog verticaal). Anders: scrollen.
+                         *  - Even stil vasthouden (200 ms, < halve slop) pakt altijd: de
+                         *    bewuste route, ook op 3/9 uur.
+                         */
+                        val slop = viewConfiguration.touchSlop
+                        val commitDist = 0.6f * slop
+                        val holdMs = 200L
+                        var holdEligible = true
+                        var pos = down.position
+                        var decided = false
+                        while (!decided) {
+                            val waited = SystemClock.uptimeMillis() - down.uptimeMillis
+                            val event = if (holdEligible) {
+                                withTimeoutOrNull((holdMs - waited).coerceAtLeast(1L)) { awaitPointerEvent() }
+                            } else {
+                                awaitPointerEvent()
+                            }
+                            if (event == null) {
+                                decided = true // stil vastgehouden: bewust pakken
+                                break
+                            }
+                            val ch = event.changes.firstOrNull { it.id == down.id } ?: return@awaitEachGesture
+                            if (!ch.pressed || ch.isConsumed) return@awaitEachGesture // tik, of iemand anders nam het
+                            pos = ch.position
+                            val d = pos - down.position
+                            val dist = d.getDistance()
+                            if (dist > 0.5f * slop) holdEligible = false
+                            if (dist < commitDist) continue
+
+                            val fromC = pos - c
+                            val len = fromC.getDistance().coerceAtLeast(1f)
+                            val radial = Offset(fromC.x / len, fromC.y / len)
+                            val tangent = Offset(-radial.y, radial.x)
+                            val t = kotlin.math.abs(d.x * tangent.x + d.y * tangent.y)
+                            val rad = kotlin.math.abs(d.x * radial.x + d.y * radial.y)
+                            val steepVertical = kotlin.math.abs(d.y) > 2f * kotlin.math.abs(d.x)
+                            val elapsed = (ch.uptimeMillis - down.uptimeMillis).coerceAtLeast(1L)
+                            val slow = dist / elapsed < 0.5f * density // < 0,5 dp/ms
+
+                            decided = if (!steepVertical) {
+                                t >= rad
+                            } else {
+                                precise && slow && t >= 2.5f * rad
+                            }
+                            // Drempel gehaald zonder besluit: dit is een scroll. Loslaten.
+                            if (!decided && dist >= slop) return@awaitEachGesture
                         }
-                        if (cancelled) return@awaitEachGesture
+                        // Vanaf hier is het een draai: de pagina mag niet meer meebewegen.
+                        currentEvent.changes.firstOrNull { it.id == down.id }?.consume()
 
                         view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                         val r = latestRange
                         val stepSize = latestStep
                         var value = latestTarget
-                        // Rekenen vanaf het aanraakpunt, zodat ook de eerste millimeters tellen.
+                        // Rekenen vanaf het aanraakpunt: de beweging vóór het besluit telt mee.
                         var prev = angleOf(down.position, c)
                         dragValue = value
 
-                        fun follow(pos: Offset) {
-                            val ang = angleOf(pos, c)
-                            var d = ang - prev
-                            if (d > 180) d -= 360
-                            if (d < -180) d += 360
+                        fun follow(p: Offset) {
+                            val ang = angleOf(p, c)
+                            var dd = ang - prev
+                            if (dd > 180) dd -= 360
+                            if (dd < -180) dd += 360
                             prev = ang
-                            value = (value + d / 270.0 * (r.endInclusive - r.start)).coerceIn(r)
+                            value = (value + dd / 270.0 * (r.endInclusive - r.start)).coerceIn(r)
                             val snapped = (round(value / stepSize) * stepSize).coerceIn(r)
                             if (snapped != dragValue) {
                                 haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 dragValue = snapped
                             }
                         }
-                        committed?.let { follow(it.position) }
+                        follow(pos)
 
                         val completed = drag(down.id) { change ->
                             follow(change.position)
