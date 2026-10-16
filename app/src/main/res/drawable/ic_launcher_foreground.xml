@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Promethix-beeldmerk als adaptive-icon voorgrond (108dp canvas).
+  Origineel: 100-eenheden ontwerp; hier geschaald (0.66) en gecentreerd zodat het
+  hele beeldmerk (incl. de stip bovenaan) binnen de veilige zone van 66dp valt,
+  welke vorm (cirkel, squircle, ...) de telefoon ook gebruikt.
+  De ringen waren in de SVG stroke-dasharray; VectorDrawable kent dat niet, dus
+  omgerekend naar boogpaden met exact dezelfde lengte en startpositie.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.66"
+        android:scaleY="0.66"
+        android:translateX="21"
+        android:translateY="21">
+        <!-- buitenring: r44, 260° vanaf -60° -->
+        <path
+            android:pathData="M72,11.895 A44,44 0 1,1 8.769,34.637"
+            android:strokeColor="#5E6B78"
+            android:strokeWidth="2" />
+        <!-- binnenring: r30, 248° vanaf 150° -->
+        <path
+            android:pathData="M24.019,65 A30,30 0 1,1 73.549,68.586"
+            android:strokeColor="#8C99A6"
+            android:strokeWidth="2.5" />
+        <!-- vlam -->
+        <path
+            android:fillColor="#CFEAFB"
+            android:pathData="M50,30 C58,42 61,50 50,66 C39,50 42,42 50,30 Z" />
+        <!-- stip -->
+        <path
+            android:fillColor="#9FD8F7"
+            android:pathData="M46,6 A4,4 0 1,0 54,6 A4,4 0 1,0 46,6 Z" />
+    </group>
+</vector>
