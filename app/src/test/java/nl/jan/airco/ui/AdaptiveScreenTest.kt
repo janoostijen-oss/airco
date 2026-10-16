@@ -283,7 +283,9 @@ class AdaptiveScreenTest {
     fun foldable_bedieningToontOpTemperatuur() {
         show(reachedState())
         rule.onNode(hasText("Huidig 22° · ") and hasAnyAncestor(hasTestTag(TestTags.DETAIL_PANE))).assertIsDisplayed()
-        rule.onNode(hasText("Op temperatuur") and hasAnyAncestor(hasTestTag(TestTags.DETAIL_PANE))).assertIsDisplayed()
+        // Statusregel én midden van de draaiknop.
+        rule.onAllNodes(hasText("Op temperatuur") and hasAnyAncestor(hasTestTag(TestTags.DETAIL_PANE)))
+            .fetchSemanticsNodes().let { assertEquals(2, it.size) }
         rule.onNode(androidx.compose.ui.test.hasContentDescription("doel bereikt", substring = true)).assertExists()
     }
 
