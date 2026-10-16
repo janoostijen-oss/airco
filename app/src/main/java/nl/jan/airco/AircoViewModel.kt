@@ -24,6 +24,7 @@ import nl.jan.airco.data.Mode
 import nl.jan.airco.data.NotLoggedInException
 import nl.jan.airco.data.RateLimitedException
 import nl.jan.airco.data.TokenStore
+import nl.jan.airco.data.outdoorTrend
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
