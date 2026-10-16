@@ -80,6 +80,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import android.view.HapticFeedbackConstants
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitHorizontalTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.horizontalDrag
+import androidx.compose.foundation.systemGestureExclusion
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import nl.jan.airco.AircoViewModel
@@ -645,11 +656,19 @@ private fun FanSection(unit: AircoUnit, style: ModeStyle, enabled: Boolean, vm: 
     val bars = speeds.filter { it != FanSpeed.Auto }
     val level = bars.indexOf(unit.fanSpeed) + 1 // 0 = auto
     val isAuto = unit.fanSpeed == FanSpeed.Auto
+    // Tijdens schuiven: lokale voorvertoning; pas bij loslaten één update naar MELCloud.
+    var preview by remember(unit.id) { mutableStateOf<Int?>(null) }
+    val shownLevel = preview ?: level
+    val shownAuto = preview == null && isAuto
+    val view = LocalView.current
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val latestUnit by rememberUpdatedState(unit)
+    val latestBars by rememberUpdatedState(bars)
 
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
         SectionTitle("Ventilator", Modifier.weight(1f))
         Text(
-            if (isAuto) "Automatisch" else "Stand $level van ${bars.size}",
+            if (shownAuto) "Automatisch" else "Stand $shownLevel van ${bars.size}",
             fontFamily = Manrope,
             fontWeight = FontWeight.SemiBold,
             fontSize = 12.sp,
@@ -696,10 +715,65 @@ private fun FanSection(unit: AircoUnit, style: ModeStyle, enabled: Boolean, vm: 
                 )
             }
         }
-        Row(Modifier.weight(1f).fillMaxHeight(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        /*
+         * Balkjes: tikken (per balkje, zoals voorheen) én schuiven over de hele strook.
+         *  - Schuiven start pas na horizontale touch slop; verticaal blijft de pagina
+         *    scrollen (elke kant meet zijn eigen as, wie eerst de drempel haalt wint).
+         *  - Auto doet niet mee: links voorbij stand 1 blijft het stand 1.
+         *  - 4dp hysterese op de grenzen tegen flikkeren; tikje per standwissel.
+         *  - Eén update bij loslaten, alleen als de stand echt veranderde.
+         *  - Uitgezonderd van het terug-veeggebaar (de strook loopt tot ±28dp van de rand).
+         */
+        Row(
+            Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .systemGestureExclusion()
+                .pointerInput(enabled, bars.size, rtl) {
+                    if (!enabled || bars.size < 2) return@pointerInput
+                    val count = bars.size
+                    val hyst = 4.dp.toPx()
+                    fun levelAt(x: Float, cur: Int?): Int {
+                        val w = size.width.toFloat()
+                        val cell = w / count
+                        val xx = if (rtl) w - x else x
+                        val raw = (xx / cell).toInt().coerceIn(0, count - 1) + 1
+                        if (cur == null || raw == cur) return raw
+                        val edge = if (raw > cur) cur * cell else (cur - 1) * cell
+                        return if (kotlin.math.abs(xx - edge) > hyst) raw else cur
+                    }
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val start = awaitHorizontalTouchSlopOrCancellation(down.id) { change, _ -> change.consume() }
+                            ?: return@awaitEachGesture // tik (afgehandeld door het balkje) of scroll
+                        try {
+                            preview = levelAt(start.position.x, null)
+                            view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                            val completed = horizontalDrag(start.id) { change ->
+                                val l = levelAt(change.position.x, preview)
+                                if (l != preview) {
+                                    preview = l
+                                    view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                                }
+                                change.consume()
+                            }
+                            val chosen = preview
+                            val u = latestUnit
+                            val bs = latestBars
+                            if (completed && chosen != null && chosen in 1..bs.size && u.fanSpeed != bs[chosen - 1]) {
+                                vm.setFanSpeed(u, bs[chosen - 1])
+                            }
+                        } finally {
+                            preview = null
+                        }
+                    }
+                },
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
             bars.forEachIndexed { i, speed ->
                 val n = i + 1
-                val lit = !isAuto && n <= level
+                val lit = !shownAuto && n <= shownLevel
+                val active = preview == n
                 Box(
                     Modifier
                         .weight(1f)
@@ -717,7 +791,11 @@ private fun FanSection(unit: AircoUnit, style: ModeStyle, enabled: Boolean, vm: 
                         .padding(bottom = 4.dp),
                     contentAlignment = Alignment.BottomCenter,
                 ) {
-                    FanBar(height = (10 + n * 6).dp, lit = lit, on = on, c1 = c1, c2 = c2)
+                    // Het balkje onder je vinger licht iets op tijdens schuiven.
+                    val scale by animateFloatAsState(if (active) 1.12f else 1f, tween(120), label = "fanbar")
+                    Box(Modifier.graphicsLayer { scaleX = scale; scaleY = scale; transformOrigin = TransformOrigin(0.5f, 1f) }) {
+                        FanBar(height = (10 + n * 6).dp, lit = lit, on = on, c1 = c1, c2 = c2)
+                    }
                 }
             }
         }
