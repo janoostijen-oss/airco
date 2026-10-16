@@ -568,6 +568,7 @@ private fun RoundStepButton(
     size: Dp = 52.dp,
     onClick: () -> Unit,
 ) {
+    val view = LocalView.current
     Box(
         Modifier
             .size(size)
@@ -575,7 +576,12 @@ private fun RoundStepButton(
             .clip(CircleShape)
             .background(Brush.linearGradient(listOf(Color(0xFF222731), Color(0xFF14171D))))
             .border(1.dp, Ink.white(0.09f), CircleShape)
-            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .clickable(enabled = enabled, role = Role.Button) {
+                // Voelbaar klikje bij elke tik. Bij de tik zelf, niet bij het indrukken:
+                // zo voel je niets als je over de knop heen scrolt.
+                view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                onClick()
+            }
             .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) {
