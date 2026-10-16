@@ -381,8 +381,7 @@ private fun ColumnScope.UnitControls(unit: AircoUnit, vm: AircoViewModel) {
         Modifier
             .width(268.dp)
             .align(Alignment.CenterHorizontally)
-            .offset(y = (-58).dp)
-
+            .offset(y = (-58).dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         RoundStepButton(Icons.Minus, "Temperatuur omlaag", enabled && range != null && unit.setTemperature > range.start) {
