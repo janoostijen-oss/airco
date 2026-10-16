@@ -34,6 +34,11 @@ measure() { # $1 variant
   done
 }
 
+# Opwarmblok (weggegooid): de eerste minuten na het booten is de emulator trager,
+# wat anders vooral de variant treft die als eerste gemeten wordt.
+install apks/base.apk
+measure warmup
+
 for block in 1 2; do
   for v in base new; do
     install "apks/$v.apk"
