@@ -1,5 +1,8 @@
 package nl.jan.airco.ui
 
+import android.os.Build
+import android.view.HapticFeedbackConstants
+import android.view.View
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
@@ -123,3 +126,21 @@ object Icons {
 /** 21.5 → "21,5"; 22.0 → "22". */
 fun fmtTemp(t: Double): String =
     if (t % 1.0 == 0.0) t.toInt().toString() else t.toString().replace('.', ',')
+
+/**
+ * Haptiek voor aan/uit, bewust anders dan de rest van de app
+ * (−/+ = toetsklik, draaiknop/ventilator = fijne tikjes):
+ *  - Android 14+: de systeemeigen TOGGLE_ON / TOGGLE_OFF, aan en uit voelen verschillend.
+ *  - Android 11–13: aan = CONFIRM (stevig, "gelukt"), uit = CONTEXT_CLICK (korter, lichter).
+ *  - Ouder: LONG_PRESS, de stevigste die er is.
+ */
+fun View.powerHaptic(turningOn: Boolean) {
+    val type = when {
+        Build.VERSION.SDK_INT >= 34 ->
+            if (turningOn) HapticFeedbackConstants.TOGGLE_ON else HapticFeedbackConstants.TOGGLE_OFF
+        Build.VERSION.SDK_INT >= 30 ->
+            if (turningOn) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.CONTEXT_CLICK
+        else -> HapticFeedbackConstants.LONG_PRESS
+    }
+    performHapticFeedback(type)
+}

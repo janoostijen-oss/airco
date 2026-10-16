@@ -524,6 +524,7 @@ private fun PowerToggle(
     onToggle: () -> Unit,
 ) {
     val knob = height - 8.dp
+    val view = LocalView.current
     val knobX by animateDpAsState(
         if (on) width - knob - 5.dp else 3.dp,
         spring(dampingRatio = 0.62f, stiffness = Spring.StiffnessMediumLow),
@@ -542,7 +543,10 @@ private fun PowerToggle(
                 ),
             )
             .border(1.dp, Ink.white(0.1f), shape)
-            .clickable(enabled = enabled, role = Role.Switch, onClick = onToggle)
+            .clickable(enabled = enabled, role = Role.Switch) {
+                view.powerHaptic(turningOn = !on)
+                onToggle()
+            }
             .semantics {
                 contentDescription = "$label ${if (on) "aan, tik om uit te zetten" else "uit, tik om aan te zetten"}".trim()
             },
@@ -879,6 +883,7 @@ private fun SummaryStrip(units: List<AircoUnit>, outdoorTemperature: Double?, vm
     // Gemiddelde van alle buitenunits, elk met de meest recente meting (berekend in het ViewModel).
     val outdoor = outdoorTemperature?.let { fmtTemp(kotlin.math.round(it * 10) / 10) } ?: "–"
     val onCount = units.count { it.power }
+    val view = LocalView.current
     val anyOn = onCount > 0
     val shape = RoundedCornerShape(22.dp)
 
@@ -917,7 +922,10 @@ private fun SummaryStrip(units: List<AircoUnit>, outdoorTemperature: Double?, vm
                 .clip(btnShape)
                 .background(Brush.linearGradient(listOf(Color(0xFF262B36), Color(0xFF161920))))
                 .border(1.dp, Ink.white(0.12f), btnShape)
-                .clickable(role = Role.Button) { vm.setAllPower(!anyOn) }
+                .clickable(role = Role.Button) {
+                    view.powerHaptic(turningOn = !anyOn)
+                    vm.setAllPower(!anyOn)
+                }
                 .padding(horizontal = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
