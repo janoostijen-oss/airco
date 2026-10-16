@@ -1234,8 +1234,9 @@ private fun SummaryStat(
             lineHeight = lineHeight,
             color = Ink.Muted,
         )
-        val twoLines = with(LocalDensity.current) { (lineHeight * 2).toDp() }
-        Column(Modifier.heightIn(min = twoLines), verticalArrangement = Arrangement.Bottom) {
+        // Vaste hoogte (iets ruimer dan twee regels): één of twee regels, het getal staat altijd even hoog.
+        val twoLines = with(LocalDensity.current) { (size.label * 1.5f * 2).sp.toDp() }
+        Column(Modifier.height(twoLines), verticalArrangement = Arrangement.Bottom) {
             Text(label.uppercase(), style = labelStyle, maxLines = 1, softWrap = false)
             if (secondLine != null) Text(secondLine.uppercase(), style = labelStyle, maxLines = 1, softWrap = false)
         }
