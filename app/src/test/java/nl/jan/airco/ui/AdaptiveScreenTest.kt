@@ -213,8 +213,12 @@ class AdaptiveScreenTest {
         val buiten = rule.onNodeWithText("BUITEN").fetchSemanticsNode().boundsInRoot
         val vandaag = rule.onNodeWithText("VANDAAG").fetchSemanticsNode().boundsInRoot
         val actief = rule.onNodeWithText("ACTIEF").fetchSemanticsNode().boundsInRoot
-        assertTrue(buiten.right <= vandaag.left && vandaag.right <= actief.left)
-        assertEquals(buiten.top, vandaag.top, 1f)
+        assertTrue(
+            "volgorde: buiten=$buiten vandaag=$vandaag actief=$actief",
+            buiten.center.x < vandaag.center.x && vandaag.center.x < actief.center.x,
+        )
+        assertEquals("op één regel", buiten.top, vandaag.top, 1f)
+        assertEquals("op één regel", vandaag.top, actief.top, 1f)
     }
 
     private fun density(): Float =

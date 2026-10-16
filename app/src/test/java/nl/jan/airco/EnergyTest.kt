@@ -5,10 +5,14 @@ import nl.jan.airco.ui.energyLabel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import org.junit.runner.RunWith
+import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.time.Instant
 import java.time.ZoneId
 
 /** Verbruik vandaag: parsen, optellen over units, begin van de dag, weergave. */
+// Robolectric: org.json is Android-code en bestaat niet op een kale JVM.
+@RunWith(AndroidJUnit4::class)
 class EnergyTest {
     @Test
     fun telWattUrenOpAlsKwh() {
