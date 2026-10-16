@@ -1,0 +1,208 @@
+package nl.jan.airco.ui
+
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import nl.jan.airco.AircoActions
+import nl.jan.airco.Screen
+import nl.jan.airco.UiState
+import nl.jan.airco.data.AircoUnit
+import nl.jan.airco.data.Capabilities
+import nl.jan.airco.data.FanSpeed
+import nl.jan.airco.data.Mode
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.annotation.Config
+
+/**
+ * Het echte units-scherm op verschillende schermformaten (Robolectric zet de
+ * vensterbreedte via qualifiers), met nepdata en een nep-ViewModel.
+ */
+@RunWith(AndroidJUnit4::class)
+class AdaptiveScreenTest {
+
+    @get:Rule
+    val rule = createComposeRule()
+
+    private val actions = FakeActions()
+
+    private fun show() {
+        rule.setContent {
+            MaterialTheme(colorScheme = darkColorScheme()) {
+                UnitsScreen(
+                    state = UiState(screen = Screen.Units, units = sampleUnits(), outdoorTemperature = 8.5),
+                    vm = actions,
+                )
+            }
+        }
+        rule.waitForIdle()
+    }
+
+    // --------------------------------------------------------------- telefoon
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun telefoon_toontOverzichtZonderLijstPaneel() {
+        show()
+        rule.onNodeWithTag(TestTags.OVERVIEW).assertIsDisplayed()
+        rule.onNodeWithTag(TestTags.LIST_PANE).assertDoesNotExist()
+        rule.onNodeWithTag(TestTags.CURRENT_TEMP).assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun telefoon_tikOpRuimteOpentBediening() {
+        show()
+        rule.onNode(hasText("Keuken") and hasAnyAncestor(hasTestTag(TestTags.OVERVIEW))).performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag(TestTags.DETAIL_PANE).assertIsDisplayed()
+        rule.onNode(hasTestTag(TestTags.DETAIL_NAME) and hasAnyAncestor(hasTestTag(TestTags.DETAIL_PANE)))
+            .assertTextEquals("Keuken")
+    }
+
+    // --------------------------------------------------------------- foldable
+
+    @Test
+    @Config(qualifiers = "w700dp-h840dp")
+    fun foldable_toontLijstEnBedieningNaastElkaar() {
+        show()
+        rule.onNodeWithTag(TestTags.LIST_PANE).assertIsDisplayed()
+        rule.onNodeWithTag(TestTags.DETAIL_PANE).assertIsDisplayed()
+        rule.onNodeWithTag(TestTags.DIAL).assertIsDisplayed()
+        rule.onNodeWithTag(TestTags.OVERVIEW).assertDoesNotExist()
+        // Eerste ruimte is standaard gekozen; de tablet-tegel hoort hier niet.
+        rule.onNodeWithTag(TestTags.DETAIL_NAME).assertTextEquals("Kantoor")
+        rule.onNodeWithTag(TestTags.CURRENT_TEMP).assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w700dp-h840dp")
+    fun foldable_ruimteKiezenWisseltBediening() {
+        show()
+        rule.onNodeWithTag(TestTags.roomRow("slaapkamer")).performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag(TestTags.DETAIL_NAME).assertTextEquals("Slaapkamer")
+    }
+
+    @Test
+    @Config(qualifiers = "w600dp-h800dp")
+    fun smalleFoldable_draaiknopPastNogInBeeld() {
+        show()
+        rule.onNodeWithTag(TestTags.LIST_PANE).assertIsDisplayed()
+        rule.onNodeWithTag(TestTags.DIAL).assertIsDisplayed()
+        // De knop wordt hier geschaald: hij moet binnen het bedieningspaneel blijven.
+        val pane = rule.onNodeWithTag(TestTags.DETAIL_PANE).fetchSemanticsNode().boundsInRoot
+        val dial = rule.onNodeWithTag(TestTags.DIAL).fetchSemanticsNode().boundsInRoot
+        assertTrue("draaiknop ($dial) valt buiten paneel ($pane)", dial.left >= pane.left - 1f && dial.right <= pane.right + 1f)
+    }
+
+    @Test
+    @Config(qualifiers = "w800dp-h1280dp")
+    fun staandeTablet_gebruiktFoldableIndeling() {
+        show()
+        rule.onNodeWithTag(TestTags.LIST_PANE).assertIsDisplayed()
+        rule.onNodeWithTag(TestTags.DETAIL_PANE).assertIsDisplayed()
+        rule.onNodeWithTag(TestTags.CURRENT_TEMP).assertDoesNotExist()
+    }
+
+    // --------------------------------------------------------------- tablet
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp-land")
+    fun tablet_toontLijstEnGecentreerdeBediening() {
+        show()
+        rule.onNodeWithTag(TestTags.LIST_PANE).assertIsDisplayed()
+        rule.onNodeWithTag(TestTags.DETAIL_PANE).assertIsDisplayed()
+        rule.onNodeWithTag(TestTags.CURRENT_TEMP).assertIsDisplayed()
+        rule.onNodeWithText("HUIDIGE TEMPERATUUR").assertIsDisplayed()
+        rule.onNodeWithTag(TestTags.OVERVIEW).assertDoesNotExist()
+
+        // Draaiknop horizontaal gecentreerd in het bedieningspaneel.
+        val pane = rule.onNodeWithTag(TestTags.DETAIL_PANE).fetchSemanticsNode().boundsInRoot
+        val dial = rule.onNodeWithTag(TestTags.DIAL).fetchSemanticsNode().boundsInRoot
+        val paneCenter = pane.left + 44f * density() + (pane.width - (44f + 40f) * density()) / 2f
+        assertEquals(paneCenter, dial.center.x, 2f * density())
+        // Volgorde van boven naar onder: huidige temperatuur, draaiknop.
+        val tile = rule.onNodeWithTag(TestTags.CURRENT_TEMP).fetchSemanticsNode().boundsInRoot
+        assertTrue("tegel staat niet boven de draaiknop", tile.bottom <= dial.top)
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp-land")
+    fun tablet_ruimteKiezenEnAanzettenVanuitLijst() {
+        show()
+        rule.onNodeWithTag(TestTags.roomRow("keuken")).performClick()
+        rule.waitForIdle()
+        rule.onNodeWithTag(TestTags.DETAIL_NAME).assertTextEquals("Keuken")
+
+        rule.onNode(
+            hasClickAction() and hasAnyAncestor(hasTestTag(TestTags.roomRow("slaapkamer"))) and
+                androidx.compose.ui.test.hasContentDescription("Slaapkamer uit, tik om aan te zetten"),
+        ).performClick()
+        assertEquals(listOf("slaapkamer" to true), actions.powerCalls)
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp-land")
+    fun tablet_minPlusWerktOpGekozenRuimte() {
+        show()
+        rule.onNodeWithContentDescription("Temperatuur omhoog").performClick()
+        assertEquals(listOf("kantoor" to 1), actions.tempSteps)
+    }
+
+    private fun density(): Float =
+        androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+            .resources.displayMetrics.density
+}
+
+/** Neemt aanroepen op in plaats van MELCloud te benaderen. */
+private class FakeActions : AircoActions {
+    val powerCalls = mutableListOf<Pair<String, Boolean>>()
+    val tempSteps = mutableListOf<Pair<String, Int>>()
+    override fun onForeground() {}
+    override fun onBackground() {}
+    override fun clearMessage() {}
+    override fun refresh(userInitiated: Boolean, background: Boolean) {}
+    override fun logout() {}
+    override fun setAllPower(on: Boolean) {}
+    override fun setPower(unit: AircoUnit, on: Boolean) { powerCalls += unit.id to on }
+    override fun setMode(unit: AircoUnit, mode: Mode) {}
+    override fun setFanSpeed(unit: AircoUnit, speed: FanSpeed) {}
+    override fun changeTemperature(unit: AircoUnit, direction: Int) { tempSteps += unit.id to direction }
+    override fun setTemperature(unit: AircoUnit, value: Double) {}
+}
+
+private fun sampleUnits(): List<AircoUnit> {
+    val caps = Capabilities(
+        modes = listOf(Mode.Heat, Mode.Cool, Mode.Dry, Mode.Fan, Mode.Automatic),
+        numberOfFanSpeeds = 5,
+        hasAutoFan = true,
+        halfDegrees = true,
+        heatRange = 16.0..31.0,
+        coolDryRange = 16.0..31.0,
+        autoRange = 16.0..31.0,
+    )
+    fun unit(id: String, name: String, on: Boolean, mode: Mode, room: Double, target: Double, fan: FanSpeed) = AircoUnit(
+        id = id, name = name, building = "Thuis", isConnected = true, isInError = false, power = on,
+        roomTemperature = room, setTemperature = target, mode = mode, fanSpeed = fan, capabilities = caps,
+    )
+    return listOf(
+        unit("kantoor", "Kantoor", on = true, mode = Mode.Heat, room = 22.0, target = 21.0, fan = FanSpeed.One),
+        unit("keuken", "Keuken", on = false, mode = Mode.Heat, room = 22.0, target = 21.5, fan = FanSpeed.One),
+        unit("slaapkamer", "Slaapkamer", on = false, mode = Mode.Cool, room = 20.0, target = 19.0, fan = FanSpeed.Auto),
+    )
+}

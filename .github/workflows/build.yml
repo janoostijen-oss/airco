@@ -17,20 +17,42 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: Build release APK
+      # Unit- en UI-tests (telefoon, foldable, tablet via Robolectric) — eerst, zodat
+      # een kapotte indeling nooit als APK uitkomt.
+      - name: Tests
         shell: bash
         run: |
           chmod +x gradlew
           set -o pipefail
+          ./gradlew :app:testDebugUnitTest --no-daemon 2>&1 | tee test.log
+
+      - name: Build release APK
+        shell: bash
+        run: |
+          set -o pipefail
           ./gradlew :app:assembleRelease --no-daemon 2>&1 | tee build.log
 
-      # Compileerfouten als annotaties, zodat ze zonder de volledige log leesbaar zijn.
-      - name: Report compile errors
+      # Compileer- en testfouten als annotaties, zodat ze zonder de volledige log leesbaar zijn.
+      - name: Report errors
         if: failure()
         shell: bash
         run: |
-          grep -E "^e: |What went wrong" -A1 build.log | head -40 | while IFS= read -r line; do
-            [ -n "$line" ] && echo "::error::${line}"
+          for f in test.log build.log; do
+            [ -f "$f" ] || continue
+            grep -E "^e: |What went wrong| FAILED$|AssertionError|Exception:" -A2 "$f" | head -60 | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error::${line}"
+            done
+          done
+          # Per mislukte test de melding uit het JUnit-rapport.
+          for x in app/build/test-results/testDebugUnitTest/*.xml; do
+            [ -f "$x" ] || continue
+            python3 - "$x" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          for tc in ET.parse(sys.argv[1]).getroot().iter("testcase"):
+              for f in list(tc.findall("failure")) + list(tc.findall("error")):
+                  msg = (f.get("message") or f.text or "").strip().splitlines()
+                  print(f"::error::TEST {tc.get('classname')}.{tc.get('name')}: {' | '.join(msg[:3])[:900]}")
+          PY
           done
 
       - uses: actions/upload-artifact@v4

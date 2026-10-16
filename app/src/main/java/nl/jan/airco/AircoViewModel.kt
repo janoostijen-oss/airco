@@ -50,7 +50,7 @@ data class UiState(
 
 private const val OUTDOOR_INTERVAL_MS = 10 * 60 * 1000L
 
-class AircoViewModel(app: Application) : AndroidViewModel(app) {
+class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
     private val api = MelcloudApi(TokenStore(app), CredentialStore(app))
     private val _state = MutableStateFlow(UiState(screen = if (api.isLoggedIn) Screen.Units else Screen.Login))
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -131,7 +131,7 @@ class AircoViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun logout() {
+    override fun logout() {
         api.logout()
         _state.value = UiState(screen = Screen.Login)
     }
@@ -188,7 +188,7 @@ class AircoViewModel(app: Application) : AndroidViewModel(app) {
      * IR-afstandsbediening verschijnt zo vanzelf zodra de wifi-module van de
      * unit hem aan MELCloud heeft gemeld.
      */
-    fun onForeground() {
+    override fun onForeground() {
         pollJob?.cancel()
         pollJob = viewModelScope.launch {
             refresh()
@@ -201,7 +201,7 @@ class AircoViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun onBackground() {
+    override fun onBackground() {
         pollJob?.cancel()
         pollJob = null
     }
@@ -214,7 +214,7 @@ class AircoViewModel(app: Application) : AndroidViewModel(app) {
         refresh(background = true)
     }
 
-    fun refresh(userInitiated: Boolean = false, background: Boolean = false) {
+    override fun refresh(userInitiated: Boolean, background: Boolean) {
         if (_state.value.screen != Screen.Units) return
         // Een achtergrondronde onderbreekt geen lopende (handmatige) refresh.
         if (background && refreshJob?.isActive == true) return
@@ -262,17 +262,17 @@ class AircoViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun clearMessage() = _state.update { it.copy(message = null) }
+    override fun clearMessage() = _state.update { it.copy(message = null) }
 
     /** "Alles uit/aan" in het overzicht: elke bereikbare unit die nog niet in die stand staat. */
-    fun setAllPower(on: Boolean) {
+    override fun setAllPower(on: Boolean) {
         _state.value.units.filter { it.isConnected && it.power != on }.forEach { setPower(it, on) }
     }
 
-    fun setPower(unit: AircoUnit, on: Boolean) =
+    override fun setPower(unit: AircoUnit, on: Boolean) =
         send(unit, mapOf("power" to on)) { it.copy(power = on) }
 
-    fun setMode(unit: AircoUnit, mode: Mode) {
+    override fun setMode(unit: AircoUnit, mode: Mode) {
         val values = mutableMapOf<String, Any>("operationMode" to mode.wire)
         var newTemp = unit.setTemperature
         unit.capabilities.rangeFor(mode)?.let { range ->
@@ -287,17 +287,17 @@ class AircoViewModel(app: Application) : AndroidViewModel(app) {
         send(unit, values) { it.copy(mode = mode, setTemperature = newTemp, power = true) }
     }
 
-    fun setFanSpeed(unit: AircoUnit, speed: FanSpeed) =
+    override fun setFanSpeed(unit: AircoUnit, speed: FanSpeed) =
         send(unit, mapOf("setFanSpeed" to speed.wire)) { it.copy(fanSpeed = speed) }
 
     /** +/- knoppen: direct zichtbaar, pas na een korte pauze naar MELCloud (scheelt verzoeken). */
-    fun changeTemperature(unit: AircoUnit, direction: Int) {
+    override fun changeTemperature(unit: AircoUnit, direction: Int) {
         val current = _state.value.units.firstOrNull { it.id == unit.id } ?: return
         setTemperature(unit, current.setTemperature + direction * current.capabilities.step)
     }
 
     /** Draaiknop/slepen: exacte waarde, afgerond op de stap van de unit; debounced verstuurd. */
-    fun setTemperature(unit: AircoUnit, value: Double) {
+    override fun setTemperature(unit: AircoUnit, value: Double) {
         val current = _state.value.units.firstOrNull { it.id == unit.id } ?: return
         val range = current.capabilities.rangeFor(current.mode) ?: return
         val step = current.capabilities.step

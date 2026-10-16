@@ -8,6 +8,7 @@ import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
@@ -80,6 +81,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.TextUnit
+import kotlin.math.roundToInt
 import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -93,7 +101,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleResumeEffect
-import nl.jan.airco.AircoViewModel
+import nl.jan.airco.AircoActions
 import nl.jan.airco.UiState
 import nl.jan.airco.data.AircoUnit
 import nl.jan.airco.data.FanSpeed
@@ -101,7 +109,7 @@ import nl.jan.airco.data.Mode
 
 
 @Composable
-fun UnitsScreen(state: UiState, vm: AircoViewModel) {
+fun UnitsScreen(state: UiState, vm: AircoActions) {
     // Op de voorgrond: automatisch verversen (ook IR-wijzigingen); weg: stoppen.
     LifecycleResumeEffect(Unit) {
         vm.onForeground()
@@ -116,7 +124,13 @@ fun UnitsScreen(state: UiState, vm: AircoViewModel) {
         }
     }
 
+    // Indeling op vensterbreedte: telefoon (overzicht ⇄ detail) of lijst + bediening naast elkaar.
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp.toFloat()
+    val layoutMode = layoutModeFor(screenWidthDp)
+    val twoPane = layoutMode != LayoutMode.Compact
+
     // null = overzicht "Alle ruimtes"; anders de bedieningspagina van die unit.
+    // In twee-panelen: de gekozen ruimte (null = de eerste).
     var detailId by rememberSaveable { mutableStateOf<String?>(null) }
     // De laatst geopende unit blijft op de detaillaag staan, ook tijdens het teruggaan.
     var shownId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -143,7 +157,7 @@ fun UnitsScreen(state: UiState, vm: AircoViewModel) {
         if (detailId != null) detailScroll.scrollTo(0)
         progress.animateTo(if (detailId != null) 1f else 0f, tween(320, easing = emphasized))
     }
-    PredictiveBackHandler(enabled = detailId != null) { events ->
+    PredictiveBackHandler(enabled = detailId != null && !twoPane) { events ->
         try {
             events.collect { e -> progress.snapTo(1f - e.progress) }
             detailId = null // voltooid: de LaunchedEffect animeert vanaf hier naar het overzicht
@@ -177,11 +191,21 @@ fun UnitsScreen(state: UiState, vm: AircoViewModel) {
             onRefresh = { vm.refresh(userInitiated = true) },
             modifier = Modifier.fillMaxSize().safeDrawingPadding(),
         ) {
-            Box(Modifier.fillMaxSize()) {
+            if (twoPane) {
+                TwoPane(
+                    state = state,
+                    vm = vm,
+                    wide = layoutMode == LayoutMode.Expanded,
+                    listWidth = if (layoutMode == LayoutMode.Expanded) 380.dp else mediumListWidthDp(screenWidthDp).dp,
+                    selected = state.units.firstOrNull { it.id == detailId } ?: state.units.firstOrNull(),
+                    onSelect = { detailId = it },
+                )
+            } else Box(Modifier.fillMaxSize()) {
                 // --- Overzicht
                 Column(
                     Modifier
                         .fillMaxSize()
+                        .testTag(TestTags.OVERVIEW)
                         .placedIf(overviewVisible)
                         .graphicsLayer {
                             val p = progress.value
@@ -204,6 +228,7 @@ fun UnitsScreen(state: UiState, vm: AircoViewModel) {
                     Column(
                         Modifier
                             .fillMaxSize()
+                            .testTag(TestTags.DETAIL_PANE)
                             .placedIf(detailVisible)
                             .graphicsLayer {
                                 val p = progress.value
@@ -245,10 +270,15 @@ private fun Modifier.placedIf(visible: Boolean): Modifier = layout { measurable,
 // ----------------------------------------------------------------------------- header
 
 @Composable
-private fun Header(vm: AircoViewModel, title: String, onBack: (() -> Unit)?) {
+private fun Header(
+    vm: AircoActions,
+    title: String,
+    onBack: (() -> Unit)?,
+    titleSize: TextUnit = 24.sp,
+    showMore: Boolean = true,
+) {
     var spin by remember { mutableFloatStateOf(0f) }
     val spinAnim by animateFloatAsState(spin, tween(600), label = "spin")
-    var menuOpen by remember { mutableStateOf(false) }
 
     Row(Modifier.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
         // Bediening: glazen terugknop vóór de titel (zoals in het ontwerp).
@@ -261,7 +291,7 @@ private fun Header(vm: AircoViewModel, title: String, onBack: (() -> Unit)?) {
                 title,
                 fontFamily = Sora,
                 fontWeight = FontWeight.SemiBold,
-                fontSize = 24.sp,
+                fontSize = titleSize,
                 letterSpacing = (-0.5).sp,
                 color = Ink.Text,
             )
@@ -270,19 +300,27 @@ private fun Header(vm: AircoViewModel, title: String, onBack: (() -> Unit)?) {
             spin += 360f
             vm.refresh(userInitiated = true)
         }
-        Spacer(Modifier.width(8.dp))
-        Box {
-            GlassIconButton(Icons.More, "Meer opties") { menuOpen = true }
-            DropdownMenu(
-                expanded = menuOpen,
-                onDismissRequest = { menuOpen = false },
-                containerColor = Color(0xFF1C2029),
-            ) {
-                DropdownMenuItem(
-                    text = { Text("Uitloggen", fontFamily = Manrope, color = Ink.Text) },
-                    onClick = { menuOpen = false; vm.logout() },
-                )
-            }
+        if (showMore) {
+            Spacer(Modifier.width(8.dp))
+            MoreMenuButton(vm)
+        }
+    }
+}
+
+@Composable
+private fun MoreMenuButton(vm: AircoActions) {
+    var menuOpen by remember { mutableStateOf(false) }
+    Box {
+        GlassIconButton(Icons.More, "Meer opties") { menuOpen = true }
+        DropdownMenu(
+            expanded = menuOpen,
+            onDismissRequest = { menuOpen = false },
+            containerColor = Color(0xFF1C2029),
+        ) {
+            DropdownMenuItem(
+                text = { Text("Uitloggen", fontFamily = Manrope, color = Ink.Text) },
+                onClick = { menuOpen = false; vm.logout() },
+            )
         }
     }
 }
@@ -401,39 +439,57 @@ private fun RoomCard(unit: AircoUnit, selected: Boolean, modifier: Modifier, onC
 
 // ----------------------------------------------------------------------------- bediening
 
+/** Telefoon: kop, draaiknop, modus en ventilator onder elkaar (ongewijzigd ontwerp). */
 @Composable
-private fun ColumnScope.UnitControls(unit: AircoUnit, vm: AircoViewModel) {
+private fun UnitControls(unit: AircoUnit, vm: AircoActions) {
+    DetailHeader(unit, vm)
+    Spacer(Modifier.height(8.dp))
+    DialBlock(unit, vm)
+    Spacer(Modifier.height(24.dp))
+    ModeSection(unit, unit.isConnected, vm)
+    Spacer(Modifier.height(20.dp))
+    FanSection(unit, unit.mode.style(), unit.isConnected, vm)
+}
+
+/** Naam + status + aan/uit; maten per schermformaat. */
+@Composable
+private fun DetailHeader(
+    unit: AircoUnit,
+    vm: AircoActions,
+    nameSize: TextUnit = 28.sp,
+    statusSize: TextUnit = 13.sp,
+    toggleWidth: Dp = 66.dp,
+    toggleHeight: Dp = 38.dp,
+    trailing: (@Composable () -> Unit)? = null,
+) {
     val on = unit.power
     val style = unit.mode.style()
-    val range = unit.capabilities.rangeFor(unit.mode)
-    val enabled = unit.isConnected
-
-    // Titel + aan/uit
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
                 unit.name,
                 fontFamily = Sora,
                 fontWeight = FontWeight.SemiBold,
-                fontSize = 28.sp,
+                fontSize = nameSize,
                 letterSpacing = (-0.8).sp,
                 color = Ink.Text,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.testTag(TestTags.DETAIL_NAME),
             )
             Row {
                 Text(
                     "Kamer ${unit.roomTemperature?.let(::fmtTemp) ?: "–"}° · ",
                     fontFamily = Manrope,
                     fontWeight = FontWeight.Medium,
-                    fontSize = 13.sp,
+                    fontSize = statusSize,
                     color = Ink.Muted2,
                 )
                 Text(
                     statusText(unit),
                     fontFamily = Manrope,
                     fontWeight = FontWeight.Medium,
-                    fontSize = 13.sp,
+                    fontSize = statusSize,
                     color = when {
                         unit.isInError || !unit.isConnected -> Ink.Error
                         on -> style.c1
@@ -442,59 +498,83 @@ private fun ColumnScope.UnitControls(unit: AircoUnit, vm: AircoViewModel) {
                 )
             }
         }
-        PowerToggle(on = on, style = style, enabled = enabled) { vm.setPower(unit, !on) }
-    }
-
-    // Draaiknop
-    Box(Modifier.fillMaxWidth().padding(top = 8.dp), contentAlignment = Alignment.TopCenter) {
-        TemperatureDial(
-            target = unit.setTemperature,
-            current = unit.roomTemperature,
-            range = range ?: unit.capabilities.heatRange,
-            step = unit.capabilities.step,
+        PowerToggle(
             on = on,
             style = style,
-            adjustable = enabled && range != null,
-            onChange = { vm.setTemperature(unit, it) },
-        )
+            enabled = unit.isConnected,
+            width = toggleWidth,
+            height = toggleHeight,
+        ) { vm.setPower(unit, !on) }
+        trailing?.invoke()
     }
+}
 
-    // −/+ in de opening onderaan de knop
-    Row(
-        Modifier
-            .width(268.dp)
-            .align(Alignment.CenterHorizontally)
-            .offset(y = (-58).dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        RoundStepButton(Icons.Minus, "Temperatuur omlaag", enabled && range != null && unit.setTemperature > range.start) {
-            vm.changeTemperature(unit, -1)
-        }
-        Text(
-            range?.let { "${fmtTemp(it.start)}° — ${fmtTemp(it.endInclusive)}°" } ?: "Geen setpoint",
-            fontFamily = Manrope,
-            fontWeight = FontWeight.SemiBold,
-            fontSize = 11.sp,
-            letterSpacing = 0.9.sp,
-            color = Ink.Faint,
-            // Het label ligt over de onderkant van de draaiknop: zelf aanraakdoel zijn
-            // (zonder te consumeren) zodat een tik hier niet doorvalt naar de knop.
-            // Alleen het label, niet de hele rij, zodat de greep bij min/max pakbaar blijft.
-            modifier = Modifier
-                .weight(1f)
-                .pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent() } },
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-        )
-        RoundStepButton(Icons.Plus, "Temperatuur omhoog", enabled && range != null && unit.setTemperature < range.endInclusive) {
-            vm.changeTemperature(unit, +1)
+/**
+ * Draaiknop met −/+ in de opening onderaan, als één blok van 320×314dp.
+ * Is er minder breedte (smalle foldable), dan schaalt het hele blok mee;
+ * aanraken blijft kloppen omdat Compose de schaal meeneemt in de coördinaten.
+ */
+@Composable
+private fun DialBlock(unit: AircoUnit, vm: AircoActions) {
+    val on = unit.power
+    val style = unit.mode.style()
+    val range = unit.capabilities.rangeFor(unit.mode)
+    val enabled = unit.isConnected
+    BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+        val scale = (maxWidth / 320.dp).coerceIn(0.6f, 1f)
+        Box(Modifier.scaledBy(scale).size(width = 320.dp, height = 314.dp).testTag(TestTags.DIAL)) {
+            TemperatureDial(
+                target = unit.setTemperature,
+                current = unit.roomTemperature,
+                range = range ?: unit.capabilities.heatRange,
+                step = unit.capabilities.step,
+                on = on,
+                style = style,
+                adjustable = enabled && range != null,
+                onChange = { vm.setTemperature(unit, it) },
+                modifier = Modifier.align(Alignment.TopCenter),
+            )
+            // −/+ in de opening onderaan de knop (bovenop, dus eerst aanraakbaar).
+            Row(
+                Modifier.width(268.dp).align(Alignment.BottomCenter),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RoundStepButton(Icons.Minus, "Temperatuur omlaag", enabled && range != null && unit.setTemperature > range.start) {
+                    vm.changeTemperature(unit, -1)
+                }
+                Text(
+                    range?.let { "${fmtTemp(it.start)}° — ${fmtTemp(it.endInclusive)}°" } ?: "Geen setpoint",
+                    fontFamily = Manrope,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 11.sp,
+                    letterSpacing = 0.9.sp,
+                    color = Ink.Faint,
+                    // Het label ligt over de onderkant van de draaiknop: zelf aanraakdoel zijn
+                    // (zonder te consumeren) zodat een tik hier niet doorvalt naar de knop.
+                    // Alleen het label, niet de hele rij, zodat de greep bij min/max pakbaar blijft.
+                    modifier = Modifier
+                        .weight(1f)
+                        .pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent() } },
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
+                RoundStepButton(Icons.Plus, "Temperatuur omhoog", enabled && range != null && unit.setTemperature < range.endInclusive) {
+                    vm.changeTemperature(unit, +1)
+                }
+            }
         }
     }
+}
 
-    // De −/+ rij schuift 58dp omhoog; die ruimte hieronder niet laten staan.
-    Column(Modifier.offset(y = (-34).dp)) {
-        ModeSection(unit, enabled, vm)
-        Spacer(Modifier.height(20.dp))
-        FanSection(unit, style, enabled, vm)
+/** Meet de inhoud op ware grootte en tekent hem geschaald; neemt ook alleen de geschaalde ruimte in. */
+private fun Modifier.scaledBy(scale: Float): Modifier = if (scale >= 0.999f) this else layout { measurable, _ ->
+    val placeable = measurable.measure(Constraints())
+    val w = (placeable.width * scale).roundToInt()
+    val h = (placeable.height * scale).roundToInt()
+    layout(w, h) {
+        placeable.placeWithLayer((w - placeable.width) / 2, (h - placeable.height) / 2) {
+            scaleX = scale
+            scaleY = scale
+        }
     }
 }
 
@@ -614,7 +694,7 @@ private fun SectionTitle(text: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun ModeSection(unit: AircoUnit, enabled: Boolean, vm: AircoViewModel) {
+private fun ModeSection(unit: AircoUnit, enabled: Boolean, vm: AircoActions) {
     SectionTitle("Modus")
     Spacer(Modifier.height(10.dp))
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -658,7 +738,7 @@ private fun RowScope.ModeButton(mode: Mode, active: Boolean, enabled: Boolean, o
 // ----------------------------------------------------------------------------- ventilator
 
 @Composable
-private fun FanSection(unit: AircoUnit, style: ModeStyle, enabled: Boolean, vm: AircoViewModel) {
+private fun FanSection(unit: AircoUnit, style: ModeStyle, enabled: Boolean, vm: AircoActions) {
     val on = unit.power
     val c1 = if (on) style.c1 else Ink.OffC1
     val c2 = if (on) style.c2 else Ink.OffC2
@@ -829,7 +909,7 @@ private fun FanBar(height: Dp, lit: Boolean, on: Boolean, c1: Color, c2: Color) 
 // ----------------------------------------------------------------------------- lege toestand
 
 @Composable
-private fun EmptyState(state: UiState, vm: AircoViewModel) {
+private fun EmptyState(state: UiState, vm: AircoActions) {
     Column(Modifier.fillMaxWidth().padding(top = 64.dp)) {
         when {
             state.loading -> {
@@ -869,7 +949,7 @@ private fun EmptyState(state: UiState, vm: AircoViewModel) {
 // ----------------------------------------------------------------------------- overzicht "Alle ruimtes"
 
 @Composable
-private fun Overview(units: List<AircoUnit>, outdoorTemperature: Double?, vm: AircoViewModel, onOpen: (String) -> Unit) {
+private fun Overview(units: List<AircoUnit>, outdoorTemperature: Double?, vm: AircoActions, onOpen: (String) -> Unit) {
     Spacer(Modifier.height(18.dp))
     SummaryStrip(units, outdoorTemperature, vm)
     Spacer(Modifier.height(16.dp))
@@ -879,7 +959,7 @@ private fun Overview(units: List<AircoUnit>, outdoorTemperature: Double?, vm: Ai
 }
 
 @Composable
-private fun SummaryStrip(units: List<AircoUnit>, outdoorTemperature: Double?, vm: AircoViewModel) {
+private fun SummaryStrip(units: List<AircoUnit>, outdoorTemperature: Double?, vm: AircoActions) {
     // Gemiddelde van alle buitenunits, elk met de meest recente meting (berekend in het ViewModel).
     val outdoor = outdoorTemperature?.let { fmtTemp(kotlin.math.round(it * 10) / 10) } ?: "–"
     val onCount = units.count { it.power }
@@ -959,7 +1039,7 @@ private fun SummaryStat(label: String, modifier: Modifier, value: @Composable ()
 }
 
 @Composable
-private fun RoomOverviewCard(unit: AircoUnit, vm: AircoViewModel, onOpen: () -> Unit) {
+private fun RoomOverviewCard(unit: AircoUnit, vm: AircoActions, onOpen: () -> Unit) {
     val on = unit.power
     val style = unit.mode.style()
     val range = unit.capabilities.rangeFor(unit.mode)
@@ -1133,5 +1213,329 @@ private fun overviewStatus(unit: AircoUnit): String {
         Mode.Heat -> "Verwarmt naar $t°"
         Mode.Cool -> "Koelt naar $t°"
         null -> "Aan"
+    }
+}
+
+// ----------------------------------------------------------------------------- brede schermen
+
+/**
+ * Foldable (Medium) en tablet (Expanded): links de lijst met ruimtes, rechts de
+ * bediening van de gekozen ruimte. Ontwerp: "Foldable (open)" en "Tablet (liggend)".
+ */
+@Composable
+private fun TwoPane(
+    state: UiState,
+    vm: AircoActions,
+    wide: Boolean,
+    listWidth: Dp,
+    selected: AircoUnit?,
+    onSelect: (String) -> Unit,
+) {
+    Row(Modifier.fillMaxSize()) {
+        // --- Lijst
+        Column(
+            Modifier
+                .width(listWidth)
+                .fillMaxHeight()
+                .testTag(TestTags.LIST_PANE)
+                .background(if (wide) Ink.white(0.012f) else Color.Transparent)
+                .verticalScroll(rememberScrollState())
+                .padding(
+                    start = if (wide) 28.dp else 20.dp,
+                    end = if (wide) 22.dp else 16.dp,
+                    top = if (wide) 28.dp else 22.dp,
+                    bottom = 24.dp,
+                ),
+        ) {
+            Header(vm, title = "Alle ruimtes", onBack = null, titleSize = if (wide) 26.sp else 22.sp, showMore = wide)
+            if (state.units.isEmpty()) {
+                EmptyState(state, vm)
+            } else {
+                Spacer(Modifier.height(if (wide) 18.dp else 16.dp))
+                if (wide) {
+                    SummaryStrip(state.units, state.outdoorTemperature, vm)
+                } else {
+                    CompactSummary(state.units, state.outdoorTemperature, vm)
+                }
+                Spacer(Modifier.height(if (wide) 18.dp else 16.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(if (wide) 10.dp else 8.dp)) {
+                    state.units.forEach { u ->
+                        key(u.id) {
+                            RoomListRow(u, selected = u.id == selected?.id, wide = wide, vm = vm) { onSelect(u.id) }
+                        }
+                    }
+                }
+            }
+        }
+
+        Box(Modifier.width(1.dp).fillMaxHeight().background(Ink.white(0.06f)))
+
+        // --- Bediening
+        if (selected != null) {
+            if (wide) {
+                TabletDetail(selected, vm, Modifier.weight(1f))
+            } else {
+                FoldableDetail(selected, vm, Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+/** Foldable: bediening onder elkaar, zoals op de telefoon, met "meer" naast aan/uit. */
+@Composable
+private fun FoldableDetail(unit: AircoUnit, vm: AircoActions, modifier: Modifier) {
+    Column(
+        modifier
+            .fillMaxHeight()
+            .testTag(TestTags.DETAIL_PANE)
+            .verticalScroll(rememberScrollState())
+            .padding(start = 24.dp, end = 24.dp, top = 22.dp, bottom = 20.dp),
+    ) {
+        DetailHeader(unit, vm, nameSize = 26.sp, trailing = {
+            Spacer(Modifier.width(8.dp))
+            MoreMenuButton(vm)
+        })
+        Spacer(Modifier.height(10.dp))
+        DialBlock(unit, vm)
+        Spacer(Modifier.height(22.dp))
+        ModeSection(unit, unit.isConnected, vm)
+        Spacer(Modifier.height(18.dp))
+        FanSection(unit, unit.mode.style(), unit.isConnected, vm)
+    }
+}
+
+/**
+ * Tablet: kop bovenaan; daaronder één gecentreerde kolom (max 560dp breed) met
+ * huidige temperatuur, de draaiknop (horizontaal gecentreerd), modus en ventilator.
+ * Verticaal gecentreerd als het past; scrollt als het venster laag is (split-screen).
+ */
+@Composable
+private fun TabletDetail(unit: AircoUnit, vm: AircoActions, modifier: Modifier) {
+    Column(
+        modifier
+            .fillMaxHeight()
+            .testTag(TestTags.DETAIL_PANE)
+            .padding(start = 44.dp, end = 40.dp, top = 28.dp),
+    ) {
+        DetailHeader(unit, vm, nameSize = 34.sp, statusSize = 14.sp, toggleWidth = 76.dp, toggleHeight = 44.dp)
+        // De rest vult de hoogte en centreert; past het niet (laag venster), dan scrollt het.
+        BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
+            val viewport = maxHeight
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .heightIn(min = viewport)
+                    .padding(top = 16.dp, bottom = 28.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
+            ) {
+                CurrentTempTile(unit, Modifier.widthIn(max = 560.dp).fillMaxWidth())
+                DialBlock(unit, vm)
+                Column(Modifier.widthIn(max = 560.dp).fillMaxWidth().padding(top = 4.dp)) {
+                    ModeSection(unit, unit.isConnected, vm)
+                    Spacer(Modifier.height(18.dp))
+                    FanSection(unit, unit.mode.style(), unit.isConnected, vm)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CurrentTempTile(unit: AircoUnit, modifier: Modifier) {
+    val shape = RoundedCornerShape(18.dp)
+    Row(
+        modifier
+            .clip(shape)
+            .background(Ink.white(0.035f))
+            .border(1.dp, Ink.white(0.07f), shape)
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .testTag(TestTags.CURRENT_TEMP),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "HUIDIGE TEMPERATUUR",
+            fontFamily = Manrope,
+            fontWeight = FontWeight.Bold,
+            fontSize = 10.sp,
+            letterSpacing = 1.6.sp,
+            color = Ink.Dim,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            "${unit.roomTemperature?.let(::fmtTemp) ?: "–"}°",
+            fontFamily = Sora,
+            fontWeight = FontWeight.Light,
+            fontSize = 24.sp,
+            color = Color(0xFFE4E8EF),
+        )
+    }
+}
+
+/** Foldable-samenvatting: Buiten | Actief, met "Alles uit/aan" over de volle breedte eronder. */
+@Composable
+private fun CompactSummary(units: List<AircoUnit>, outdoorTemperature: Double?, vm: AircoActions) {
+    val outdoor = outdoorTemperature?.let { fmtTemp(kotlin.math.round(it * 10) / 10) } ?: "–"
+    val onCount = units.count { it.power }
+    val anyOn = onCount > 0
+    val view = LocalView.current
+    val shape = RoundedCornerShape(20.dp)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(Ink.white(0.04f))
+            .border(1.dp, Ink.white(0.08f), shape)
+            .padding(start = 16.dp, end = 14.dp, top = 14.dp, bottom = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            SummaryStat("Buiten", Modifier.weight(1f)) {
+                Text("$outdoor°", fontFamily = Sora, fontWeight = FontWeight.Light, fontSize = 22.sp, color = Ink.Text)
+            }
+            Box(Modifier.width(1.dp).height(34.dp).background(Ink.white(0.08f)))
+            SummaryStat("Actief", Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text("$onCount", fontFamily = Sora, fontWeight = FontWeight.Light, fontSize = 22.sp, color = Ink.Text)
+                    Text(
+                        " / ${units.size}",
+                        fontFamily = Sora,
+                        fontWeight = FontWeight.Light,
+                        fontSize = 13.sp,
+                        color = Ink.Dim,
+                        modifier = Modifier.padding(bottom = 3.dp),
+                    )
+                }
+            }
+        }
+        val btnShape = RoundedCornerShape(14.dp)
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .height(44.dp)
+                .shadow(8.dp, btnShape)
+                .clip(btnShape)
+                .background(Brush.linearGradient(listOf(Color(0xFF262B36), Color(0xFF161920))))
+                .border(1.dp, Ink.white(0.12f), btnShape)
+                .clickable(role = Role.Button) {
+                    view.powerHaptic(turningOn = !anyOn)
+                    vm.setAllPower(!anyOn)
+                },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+        ) {
+            Icon(Icons.Power, contentDescription = null, tint = Ink.TextStrong, modifier = Modifier.size(14.dp))
+            Text(
+                if (anyOn) "Alles uit" else "Alles aan",
+                fontFamily = Manrope,
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp,
+                color = Ink.TextStrong,
+            )
+        }
+    }
+}
+
+/** Eén ruimte in de lijst: kiezen (links) en aan/uit (rechts) als losse aanraakdoelen. */
+@Composable
+private fun RoomListRow(unit: AircoUnit, selected: Boolean, wide: Boolean, vm: AircoActions, onSelect: () -> Unit) {
+    val on = unit.power
+    val style = unit.mode.style()
+    val shape = RoundedCornerShape(if (wide) 22.dp else 18.dp)
+    val border by animateColorAsState(
+        when {
+            selected && on -> style.c2.copy(alpha = 0.4f)
+            selected -> Ink.white(0.18f)
+            else -> Ink.white(0.06f)
+        },
+        tween(250),
+        label = "rowBorder",
+    )
+    val dot = when {
+        unit.isInError || !unit.isConnected -> Ink.Error
+        on -> style.c2
+        else -> Color(0xFF4A5160)
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .testTag(TestTags.roomRow(unit.id))
+            .then(if (selected && on && wide) Modifier.shadow(16.dp, shape, ambientColor = style.c2, spotColor = Color.Black) else Modifier)
+            .clip(shape)
+            .background(
+                when {
+                    selected && wide -> Brush.linearGradient(listOf(Ink.white(0.085f), Ink.white(0.03f)))
+                    selected -> Brush.linearGradient(listOf(Ink.white(0.08f), Ink.white(0.08f)))
+                    else -> Brush.linearGradient(listOf(Ink.white(0.025f), Ink.white(0.025f)))
+                },
+            )
+            .border(1.dp, border, shape)
+            .padding(
+                start = if (wide) 16.dp else 12.dp,
+                end = if (wide) 12.dp else 10.dp,
+                top = if (wide) 12.dp else 8.dp,
+                bottom = if (wide) 12.dp else 8.dp,
+            ),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(if (wide) 10.dp else 8.dp),
+    ) {
+        Row(
+            Modifier
+                .weight(1f)
+                .heightIn(min = if (wide) 60.dp else 52.dp)
+                .clickable(role = Role.Tab, onClickLabel = "Toon ${unit.name}", onClick = onSelect)
+                .semantics { this.selected = selected },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(if (wide) 14.dp else 10.dp),
+        ) {
+            Box(
+                Modifier
+                    .size(if (wide) 9.dp else 8.dp)
+                    .then(if (on) Modifier.shadow(6.dp, CircleShape, ambientColor = dot, spotColor = dot) else Modifier)
+                    .background(dot, CircleShape),
+            )
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(if (wide) 4.dp else 3.dp)) {
+                Text(
+                    unit.name,
+                    fontFamily = Sora,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = if (wide) 17.sp else 15.sp,
+                    color = Ink.TextStrong,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    overviewStatus(unit),
+                    fontFamily = Manrope,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = if (wide) 12.sp else 11.sp,
+                    color = when {
+                        unit.isInError || !unit.isConnected -> Ink.Error
+                        on -> style.c1
+                        else -> Ink.Muted
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            val temp = "${unit.roomTemperature?.let(::fmtTemp) ?: "–"}°"
+            if (wide) {
+                Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(temp, fontFamily = Sora, fontWeight = FontWeight.Light, fontSize = 22.sp, color = Color(0xFFE4E8EF))
+                    Text("KAMER", fontFamily = Manrope, fontWeight = FontWeight.Bold, fontSize = 10.sp, letterSpacing = 1.6.sp, color = Ink.Dim)
+                }
+            } else {
+                Text(temp, fontFamily = Sora, fontWeight = FontWeight.Light, fontSize = 18.sp, color = Color(0xFFE4E8EF))
+            }
+        }
+        PowerToggle(
+            on = on,
+            style = style,
+            enabled = unit.isConnected,
+            width = if (wide) 58.dp else 50.dp,
+            height = if (wide) 34.dp else 30.dp,
+            label = unit.name,
+        ) { vm.setPower(unit, !on) }
     }
 }
