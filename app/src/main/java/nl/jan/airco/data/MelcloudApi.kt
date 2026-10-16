@@ -93,6 +93,21 @@ class MelcloudApi(private val tokens: TokenStore, private val credentials: Crede
         return withContext(Dispatchers.Default) { ReportParser.latestOutdoor(body) }
     }
 
+    /**
+     * Stroomverbruik (kWh) van deze unit in het venster [from, to), per uur
+     * opgeteld door MELCloud. `null` = geen meetpunten in dat venster.
+     */
+    suspend fun energyKwh(unitId: String, from: Instant, to: Instant): Double? {
+        val url = "$BASE_URL/telemetry/telemetry/energy/$unitId".toHttpUrl().newBuilder()
+            .addQueryParameter("from", TELEMETRY_DATE.format(from))
+            .addQueryParameter("to", TELEMETRY_DATE.format(to))
+            .addQueryParameter("interval", "Hour")
+            .addQueryParameter("measure", "cumulative_energy_consumed_since_last_upload")
+            .build()
+        val body = send { Request.Builder().url(url).get() }
+        return withContext(Dispatchers.Default) { EnergyParser.totalKwh(body) }
+    }
+
     suspend fun update(unitId: String, values: Map<String, Any>) {
         val payload = JSONObject(values).toString().toRequestBody(json)
         send { Request.Builder().url("$BASE_URL/monitor/ataunit/$unitId").put(payload) }
@@ -160,6 +175,10 @@ class MelcloudApi(private val tokens: TokenStore, private val credentials: Crede
          * (anders geeft het een leeg venster; zie melcloud-api `toReportDate`).
          * Thread-safe, dus één keer aanmaken.
          */
+        /** Telemetrie wil `yyyy-MM-dd HH:mm` in UTC, met spatie en zonder seconden (anders leeg). */
+        val TELEMETRY_DATE: DateTimeFormatter =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneOffset.UTC)
+
         val REPORT_DATE: DateTimeFormatter =
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").withZone(ZoneOffset.UTC)
     }

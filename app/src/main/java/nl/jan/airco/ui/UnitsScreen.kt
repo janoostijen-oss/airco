@@ -219,7 +219,7 @@ fun UnitsScreen(state: UiState, vm: AircoActions) {
                     if (state.units.isEmpty()) {
                         EmptyState(state, vm)
                     } else {
-                        Overview(state.units, state.outdoorTemperature, vm, onOpen = { detailId = it })
+                        Overview(state, vm, onOpen = { detailId = it })
                     }
                 }
 
@@ -958,59 +958,111 @@ private fun EmptyState(state: UiState, vm: AircoActions) {
 // ----------------------------------------------------------------------------- overzicht "Alle ruimtes"
 
 @Composable
-private fun Overview(units: List<AircoUnit>, outdoorTemperature: Double?, vm: AircoActions, onOpen: (String) -> Unit) {
+private fun Overview(state: UiState, vm: AircoActions, onOpen: (String) -> Unit) {
+    val units = state.units
     Spacer(Modifier.height(18.dp))
-    SummaryStrip(units, outdoorTemperature, vm)
+    SummaryCard(units, state.outdoorTemperature, state.energyTodayKwh, vm, SummarySize.Phone)
     Spacer(Modifier.height(16.dp))
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         units.forEach { u -> key(u.id) { RoomOverviewCard(u, vm, onOpen = { onOpen(u.id) }) } }
     }
 }
 
-@Composable
-private fun SummaryStrip(units: List<AircoUnit>, outdoorTemperature: Double?, vm: AircoActions) {
-    // Gemiddelde van alle buitenunits, elk met de meest recente meting (berekend in het ViewModel).
-    val outdoor = outdoorLabel(outdoorTemperature)
-    val onCount = units.count { it.power }
-    val shape = RoundedCornerShape(22.dp)
+/** Maten van de samenvatting per schermformaat (ontwerp: telefoon, foldable, tablet). */
+internal enum class SummarySize(
+    val label: Int, val value: Int, val unit: Int, val kwhUnit: Int, val divider: Int, val gap: Int,
+    val padStart: Int, val corner: Int, val button: Int, val buttonCorner: Int, val icon: Int,
+) {
+    Phone(11, 26, 15, 15, 40, 14, 18, 22, 46, 15, 15),
+    Foldable(10, 20, 12, 11, 34, 8, 16, 20, 44, 14, 14),
+    Tablet(11, 24, 14, 14, 38, 14, 18, 22, 46, 15, 15),
+}
 
-    Row(
+/**
+ * Samenvatting bovenaan het overzicht: Buiten | Vandaag | Actief naast elkaar,
+ * daaronder "Alles uit/aan" over de volle breedte.
+ */
+@Composable
+private fun SummaryCard(
+    units: List<AircoUnit>,
+    outdoorTemperature: Double?,
+    energyTodayKwh: Double?,
+    vm: AircoActions,
+    size: SummarySize,
+) {
+    val onCount = units.count { it.power }
+    val shape = RoundedCornerShape(size.corner.dp)
+    Column(
         Modifier
             .fillMaxWidth()
             .clip(shape)
             .background(Ink.white(0.04f))
             .border(1.dp, Ink.white(0.08f), shape)
-            .padding(start = 18.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+            .padding(start = size.padStart.dp, end = 14.dp, top = 14.dp, bottom = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        SummaryStat("Buiten", Modifier.weight(1f)) {
-            Text("$outdoor°", fontFamily = Sora, fontWeight = FontWeight.Light, fontSize = 26.sp, letterSpacing = (-0.8).sp, color = Ink.Text)
-        }
-        Box(Modifier.width(1.dp).height(40.dp).background(Ink.white(0.08f)))
-        SummaryStat("Actief", Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text("$onCount", fontFamily = Sora, fontWeight = FontWeight.Light, fontSize = 26.sp, color = Ink.Text)
-                Text(
-                    " / ${units.size}",
-                    fontFamily = Sora,
-                    fontWeight = FontWeight.Light,
-                    fontSize = 15.sp,
-                    color = Ink.Dim,
-                    modifier = Modifier.padding(bottom = 4.dp),
-                )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(size.gap.dp)) {
+            SummaryStat("Buiten", size, Modifier.weight(1f)) {
+                StatValue("${outdoorLabel(outdoorTemperature)}°", null, size.value, size.unit)
+            }
+            StatDivider(size)
+            SummaryStat("Vandaag", size, Modifier.weight(1f).testTag(TestTags.ENERGY_TODAY)) {
+                val kwh = energyLabel(energyTodayKwh)
+                StatValue(kwh, if (energyTodayKwh != null) " kWh" else null, size.value, size.kwhUnit)
+            }
+            StatDivider(size)
+            SummaryStat("Actief", size, Modifier.weight(1f)) {
+                StatValue("$onCount", " / ${units.size}", size.value, size.unit)
             }
         }
         AllPowerButton(
             anyOn = onCount > 0,
             vm = vm,
-            modifier = Modifier.height(46.dp),
-            corner = 15.dp,
-            iconSize = 15.dp,
-            contentPadding = 14.dp,
+            modifier = Modifier.fillMaxWidth().height(size.button.dp),
+            corner = size.buttonCorner.dp,
+            iconSize = size.icon.dp,
+            arrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
         )
     }
 }
+
+@Composable
+private fun StatDivider(size: SummarySize) {
+    Box(Modifier.width(1.dp).height(size.divider.dp).background(Ink.white(0.08f)))
+}
+
+/** Grote waarde met optioneel een kleine, gedempte eenheid erachter ("kWh", "/ 3"). */
+@Composable
+private fun StatValue(value: String, unit: String?, valueSp: Int, unitSp: Int) {
+    Row(verticalAlignment = Alignment.Bottom) {
+        Text(
+            value,
+            fontFamily = Sora,
+            fontWeight = FontWeight.Light,
+            fontSize = valueSp.sp,
+            letterSpacing = (-0.03 * valueSp).sp,
+            color = Ink.Text,
+            maxLines = 1,
+            softWrap = false,
+        )
+        if (unit != null) {
+            Text(
+                unit,
+                fontFamily = Sora,
+                fontWeight = FontWeight.Light,
+                fontSize = unitSp.sp,
+                color = Ink.Dim,
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier.padding(bottom = (valueSp * 0.15f).dp),
+            )
+        }
+    }
+}
+
+/** "Vandaag"-waarde: kWh met één decimaal ("5,6"), of "–" zolang het onbekend is. */
+internal fun energyLabel(kwh: Double?): String =
+    kwh?.let { String.format(java.util.Locale.ROOT, "%.1f", it).replace('.', ',') } ?: "–"
 
 /** "Buiten"-waarde: op 0,1° afgerond, of "–" zolang er geen meting is. */
 private fun outdoorLabel(t: Double?): String = t?.let { fmtTemp(kotlin.math.round(it * 10) / 10) } ?: "–"
@@ -1023,7 +1075,6 @@ private fun AllPowerButton(
     modifier: Modifier,
     corner: Dp,
     iconSize: Dp,
-    contentPadding: Dp = 0.dp,
     arrangement: Arrangement.Horizontal = Arrangement.spacedBy(8.dp),
 ) {
     val view = LocalView.current
@@ -1037,8 +1088,7 @@ private fun AllPowerButton(
             .clickable(role = Role.Button) {
                 view.powerHaptic(turningOn = !anyOn)
                 vm.setAllPower(!anyOn)
-            }
-            .padding(horizontal = contentPadding),
+            },
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = arrangement,
     ) {
@@ -1056,13 +1106,13 @@ private fun AllPowerButton(
 private val AllPowerBrush = Brush.linearGradient(listOf(Color(0xFF262B36), Color(0xFF161920)))
 
 @Composable
-private fun SummaryStat(label: String, modifier: Modifier, value: @Composable () -> Unit) {
+private fun SummaryStat(label: String, size: SummarySize, modifier: Modifier, value: @Composable () -> Unit) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(
             label.uppercase(),
             fontFamily = Manrope,
             fontWeight = FontWeight.Bold,
-            fontSize = 11.sp,
+            fontSize = size.label.sp,
             letterSpacing = 1.5.sp,
             color = Ink.Muted,
             maxLines = 1,
@@ -1285,11 +1335,13 @@ private fun TwoPane(
                 EmptyState(state, vm)
             } else {
                 Spacer(Modifier.height(if (wide) 18.dp else 16.dp))
-                if (wide) {
-                    SummaryStrip(state.units, state.outdoorTemperature, vm)
-                } else {
-                    CompactSummary(state.units, state.outdoorTemperature, vm)
-                }
+                SummaryCard(
+                    state.units,
+                    state.outdoorTemperature,
+                    state.energyTodayKwh,
+                    vm,
+                    if (wide) SummarySize.Tablet else SummarySize.Foldable,
+                )
                 Spacer(Modifier.height(if (wide) 18.dp else 16.dp))
                 Column(verticalArrangement = Arrangement.spacedBy(if (wide) 10.dp else 8.dp)) {
                     state.units.forEach { u ->
@@ -1402,51 +1454,6 @@ private fun CurrentTempTile(unit: AircoUnit, modifier: Modifier) {
             fontWeight = FontWeight.Light,
             fontSize = 24.sp,
             color = Color(0xFFE4E8EF),
-        )
-    }
-}
-
-/** Foldable-samenvatting: Buiten | Actief, met "Alles uit/aan" over de volle breedte eronder. */
-@Composable
-private fun CompactSummary(units: List<AircoUnit>, outdoorTemperature: Double?, vm: AircoActions) {
-    val outdoor = outdoorLabel(outdoorTemperature)
-    val onCount = units.count { it.power }
-    val shape = RoundedCornerShape(20.dp)
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(Ink.white(0.04f))
-            .border(1.dp, Ink.white(0.08f), shape)
-            .padding(start = 16.dp, end = 14.dp, top = 14.dp, bottom = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            SummaryStat("Buiten", Modifier.weight(1f)) {
-                Text("$outdoor°", fontFamily = Sora, fontWeight = FontWeight.Light, fontSize = 22.sp, color = Ink.Text)
-            }
-            Box(Modifier.width(1.dp).height(34.dp).background(Ink.white(0.08f)))
-            SummaryStat("Actief", Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Text("$onCount", fontFamily = Sora, fontWeight = FontWeight.Light, fontSize = 22.sp, color = Ink.Text)
-                    Text(
-                        " / ${units.size}",
-                        fontFamily = Sora,
-                        fontWeight = FontWeight.Light,
-                        fontSize = 13.sp,
-                        color = Ink.Dim,
-                        modifier = Modifier.padding(bottom = 3.dp),
-                    )
-                }
-            }
-        }
-        AllPowerButton(
-            anyOn = onCount > 0,
-            vm = vm,
-            modifier = Modifier.fillMaxWidth().height(44.dp),
-            corner = 14.dp,
-            iconSize = 14.dp,
-            arrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
         )
     }
 }

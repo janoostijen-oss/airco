@@ -44,7 +44,7 @@ class AdaptiveScreenTest {
         rule.setContent {
             MaterialTheme(colorScheme = darkColorScheme()) {
                 UnitsScreen(
-                    state = UiState(screen = Screen.Units, units = sampleUnits(), outdoorTemperature = 8.5),
+                    state = UiState(screen = Screen.Units, units = sampleUnits(), outdoorTemperature = 8.5, energyTodayKwh = 5.63),
                     vm = actions,
                 )
             }
@@ -188,6 +188,33 @@ class AdaptiveScreenTest {
         show()
         rule.onNode(hasText("Alles uit") and hasAnyAncestor(hasTestTag(TestTags.LIST_PANE))).performClick()
         assertEquals(listOf(false), actions.allPowerCalls)
+    }
+
+    // --------------------------------------------------------------- "Vandaag" (kWh)
+
+    private fun assertVandaag() {
+        rule.onNodeWithText("VANDAAG").assertIsDisplayed()
+        rule.onNode(hasText("5,6") and hasAnyAncestor(hasTestTag(TestTags.ENERGY_TODAY))).assertIsDisplayed()
+        rule.onNode(hasText(" kWh") and hasAnyAncestor(hasTestTag(TestTags.ENERGY_TODAY))).assertIsDisplayed()
+    }
+
+    @Test @Config(qualifiers = "w411dp-h891dp")
+    fun telefoon_toontVerbruikVandaag() { show(); assertVandaag() }
+
+    @Test @Config(qualifiers = "w600dp-h800dp")
+    fun smalleFoldable_toontVerbruikVandaag() { show(); assertVandaag() }
+
+    @Test @Config(qualifiers = "w1280dp-h800dp-land")
+    fun tablet_toontVerbruikVandaag() { show(); assertVandaag() }
+
+    @Test @Config(qualifiers = "w411dp-h891dp")
+    fun vandaagStaatTussenBuitenEnActief() {
+        show()
+        val buiten = rule.onNodeWithText("BUITEN").fetchSemanticsNode().boundsInRoot
+        val vandaag = rule.onNodeWithText("VANDAAG").fetchSemanticsNode().boundsInRoot
+        val actief = rule.onNodeWithText("ACTIEF").fetchSemanticsNode().boundsInRoot
+        assertTrue(buiten.right <= vandaag.left && vandaag.right <= actief.left)
+        assertEquals(buiten.top, vandaag.top, 1f)
     }
 
     private fun density(): Float =

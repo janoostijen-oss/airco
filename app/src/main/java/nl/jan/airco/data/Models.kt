@@ -41,6 +41,8 @@ data class Capabilities(
     val heatRange: ClosedFloatingPointRange<Double>,
     val coolDryRange: ClosedFloatingPointRange<Double>,
     val autoRange: ClosedFloatingPointRange<Double>,
+    /** Meet de unit zijn eigen stroomverbruik? `null` = MELCloud zegt het niet. */
+    val hasEnergyMeter: Boolean? = null,
 ) {
     /** Toegestaan temperatuurbereik voor een modus; `null` = geen setpoint (ventilator). */
     fun rangeFor(mode: Mode?): ClosedFloatingPointRange<Double>? = when (mode) {
@@ -129,6 +131,7 @@ object ContextParser {
             heatRange = range(c, "minTempHeat", "maxTempHeat", 10.0, 31.0),
             coolDryRange = range(c, "minTempCoolDry", "maxTempCoolDry", 16.0, 31.0),
             autoRange = range(c, "minTempAutomatic", "maxTempAutomatic", 16.0, 31.0),
+            hasEnergyMeter = if (c.has("hasEnergyConsumedMeter")) c.optBoolean("hasEnergyConsumedMeter") else null,
         )
         return AircoUnit(
             id = u.getString("id"),
@@ -153,6 +156,37 @@ object ContextParser {
     }
 
     private fun JSONArray.objects(): List<JSONObject> = (0 until length()).mapNotNull { optJSONObject(it) }
+}
+
+/**
+ * Parser voor `/telemetry/telemetry/energy/{id}` (airco: de meting
+ * `cumulative_energy_consumed_since_last_upload`). De waarden zijn
+ * watt-uren per tijdvak; opgeteld en omgerekend naar kWh.
+ * `null` = geen enkel meetpunt (geen data, of de unit meet niet).
+ */
+object EnergyParser {
+    /** Meer dan dit op één dag voor één airco is geen verbruik maar een tellerstand (oude data). */
+    private const val MAX_PLAUSIBLE_KWH_PER_DAY = 150.0
+
+    fun totalKwh(body: String): Double? {
+        val trimmed = body.trim()
+        if (!trimmed.startsWith("{")) return null
+        val measures = JSONObject(trimmed).optJSONArray("measureData") ?: return null
+        var wattHours = 0.0
+        var points = 0
+        for (i in 0 until measures.length()) {
+            val values = measures.optJSONObject(i)?.optJSONArray("values") ?: continue
+            for (j in 0 until values.length()) {
+                val v = values.optJSONObject(j)?.optString("value")?.trim()?.toDoubleOrNull() ?: continue
+                if (v.isNaN() || v < 0) continue
+                wattHours += v
+                points++
+            }
+        }
+        if (points == 0) return null
+        val kwh = wattHours / 1000.0
+        return kwh.takeIf { it <= MAX_PLAUSIBLE_KWH_PER_DAY }
+    }
 }
 
 /** Eén meting: tijdstip (UTC, zoals de API het geeft) + waarde. */

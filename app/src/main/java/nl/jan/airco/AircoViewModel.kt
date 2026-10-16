@@ -24,6 +24,9 @@ import nl.jan.airco.data.Mode
 import nl.jan.airco.data.NotLoggedInException
 import nl.jan.airco.data.RateLimitedException
 import nl.jan.airco.data.TokenStore
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 import kotlin.math.round
 
 sealed interface Screen {
@@ -42,6 +45,8 @@ data class UiState(
     val loadError: String? = null,
     /** Gemiddelde buitentemperatuur over alle buitenunits (meest recente meting elk). */
     val outdoorTemperature: Double? = null,
+    /** Totaal stroomverbruik vandaag (kWh) van alle units die meten; `null` = onbekend. */
+    val energyTodayKwh: Double? = null,
     /** Reserve-route: alleen aangeboden als het formulier-inloggen technisch faalt. */
     val webLoginOffered: Boolean = false,
     val showWebLogin: Boolean = false,
@@ -55,6 +60,22 @@ private const val SETTLE_MS = 4000L
  * Binnenunits gegroepeerd per buitenunit (multi-split deelt een systemId;
  * zonder systemId heeft een unit zijn eigen buitenunit). Volgorde blijft behouden.
  */
+/**
+ * Telt het verbruik van vandaag op. Per unit: of hij een meter heeft
+ * (`null` = onbekend) en het gemeten verbruik (`null` = geen meetpunten).
+ *  - Meter, maar geen meetpunten: hij stond uit, telt als 0.
+ *  - Onbekend en geen meetpunten: telt niet mee (misschien meet hij niet).
+ * `null` als geen enkele unit iets bijdraagt — dan toont de app "–".
+ */
+internal fun combineEnergy(perUnit: List<Pair<Boolean?, Double?>>): Double? {
+    val known = perUnit.mapNotNull { (meter, kwh) -> kwh ?: if (meter == true) 0.0 else null }
+    return if (known.isEmpty()) null else known.sum()
+}
+
+/** Begin van vandaag (lokale middernacht) als tijdstip. */
+internal fun startOfToday(now: Instant, zone: ZoneId): Instant =
+    now.atZone(zone).toLocalDate().atStartOfDay(zone).toInstant()
+
 internal fun outdoorGroups(units: List<AircoUnit>): List<List<String>> =
     units.groupBy({ it.systemId ?: it.id }, { it.id }).values.toList()
 
@@ -180,6 +201,54 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
         null // Buitentemperatuur is bijzaak: stil overslaan.
     }
 
+    private var energyFetchedAt = 0L
+    private var energyDay: LocalDate? = null
+    private var energyJob: Job? = null
+
+    /**
+     * Verbruik vandaag: per unit het verbruik sinds lokale middernacht,
+     * opgeteld. Zelfde tempo als de buitentemperatuur (hooguit eens per
+     * 10 minuten, tenzij je zelf vernieuwt of het een nieuwe dag is).
+     * Units die zeker geen meter hebben worden niet gevraagd.
+     */
+    private fun refreshEnergy(force: Boolean) {
+        val units = _state.value.units.filter { it.capabilities.hasEnergyMeter != false }
+        if (energyJob?.isActive == true) return
+        val zone = ZoneId.systemDefault()
+        val now = Instant.now()
+        val today = now.atZone(zone).toLocalDate()
+        val newDay = today != energyDay
+        if (!force && !newDay && System.currentTimeMillis() - energyFetchedAt < OUTDOOR_INTERVAL_MS) return
+        if (units.isEmpty()) {
+            _state.update { it.copy(energyTodayKwh = null) }
+            return
+        }
+        energyJob = viewModelScope.launch {
+            val from = startOfToday(now, zone)
+            val results = coroutineScope {
+                units.map { u ->
+                    async {
+                        val kwh = try {
+                            api.energyKwh(u.id, from, now.plusSeconds(60))
+                        } catch (e: Exception) {
+                            if (e is kotlinx.coroutines.CancellationException) throw e
+                            return@async null // mislukt: deze ronde niet meetellen
+                        }
+                        u.capabilities.hasEnergyMeter to kwh
+                    }
+                }.awaitAll()
+            }
+            // Alleen bijwerken als het ophalen voor elke unit lukte; anders de vorige waarde houden.
+            if (results.all { it != null }) {
+                energyFetchedAt = System.currentTimeMillis()
+                energyDay = today
+                _state.update { it.copy(energyTodayKwh = combineEnergy(results.filterNotNull())) }
+            } else if (newDay) {
+                _state.update { it.copy(energyTodayKwh = null) } // gisteren niet als vandaag tonen
+            }
+        }
+    }
+
     // ---------- Automatisch verversen ----------
 
     private var pollJob: Job? = null
@@ -249,6 +318,7 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
                     )
                 }
                 refreshOutdoor(force = userInitiated)
+                refreshEnergy(force = userInitiated)
             } catch (e: Exception) {
                 if (e is RateLimitedException) onBackground() // tempo terug; weer aan bij heropenen
                 if (background && e !is NotLoggedInException && e !is kotlinx.coroutines.CancellationException) {
