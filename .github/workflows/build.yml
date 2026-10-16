@@ -42,6 +42,28 @@ jobs:
           print(f"::notice::TOTAAL: {tot} tests, {fail} mislukt, {skip} overgeslagen")
           PY
 
+      # Statische analyse (Android Lint). Blokkeert de build niet; telling + fouten als notitie.
+      - name: Lint
+        continue-on-error: true
+        shell: bash
+        run: |
+          ./gradlew :app:lintDebug --no-daemon -q || true
+          python3 - <<'PY'
+          import glob, collections, xml.etree.ElementTree as ET
+          files = glob.glob("app/build/reports/lint-results-debug.xml")
+          if not files:
+              print("::warning::Geen lint-rapport gevonden"); raise SystemExit
+          issues = ET.parse(files[0]).getroot().findall("issue")
+          by = collections.Counter(i.get("severity") for i in issues)
+          print(f"::notice::Lint: {len(issues)} meldingen " + ", ".join(f"{k}={v}" for k, v in sorted(by.items())))
+          ids = collections.Counter((i.get("severity"), i.get("id")) for i in issues)
+          for (sev, iid), n in ids.most_common(15):
+              ex = next(i for i in issues if i.get("id") == iid)
+              loc = ex.find("location")
+              where = f"{loc.get('file','').split('/app/')[-1]}:{loc.get('line','')}" if loc is not None else ""
+              print(f"::notice::Lint {sev} {iid} ×{n} — {ex.get('message','')[:160]} ({where})")
+          PY
+
       - name: Build release APK
         shell: bash
         run: |

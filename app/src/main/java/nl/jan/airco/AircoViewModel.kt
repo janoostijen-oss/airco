@@ -49,6 +49,14 @@ data class UiState(
 )
 
 private const val OUTDOOR_INTERVAL_MS = 10 * 60 * 1000L
+private const val SETTLE_MS = 4000L
+
+/**
+ * Binnenunits gegroepeerd per buitenunit (multi-split deelt een systemId;
+ * zonder systemId heeft een unit zijn eigen buitenunit). Volgorde blijft behouden.
+ */
+internal fun outdoorGroups(units: List<AircoUnit>): List<List<String>> =
+    units.groupBy({ it.systemId ?: it.id }, { it.id }).values.toList()
 
 class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
     private val api = MelcloudApi(TokenStore(app), CredentialStore(app))
@@ -68,8 +76,8 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
             _state.update { it.copy(loading = true, message = null) }
             try {
                 api.login(username.trim(), password)
+                // Het units-scherm haalt bij verschijnen zelf de data op (onForeground).
                 _state.value = UiState(screen = Screen.Units)
-                refresh()
             } catch (e: BadCredentialsException) {
                 _state.update { it.copy(loading = false, message = e.message) }
             } catch (e: LoginFlowException) {
@@ -121,7 +129,6 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
                     api.saveTokens(tokens)
                     verifier = null
                     _state.value = UiState(screen = Screen.Units)
-                    refresh()
                 }
                 .onFailure { e ->
                     verifier = null
@@ -152,28 +159,25 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
         if (units.isEmpty() || outdoorJob?.isActive == true) return
         if (!force && System.currentTimeMillis() - outdoorFetchedAt < OUTDOOR_INTERVAL_MS) return
         outdoorJob = viewModelScope.launch {
-            val readings = coroutineScope {
-                units.map { u ->
-                    async {
-                        val reading = try {
-                            api.latestOutdoorReading(u.id)
-                        } catch (e: Exception) {
-                            if (e is kotlinx.coroutines.CancellationException) throw e
-                            null // Buitentemperatuur is bijzaak: stil overslaan.
-                        }
-                        (u.systemId ?: u.id) to reading
-                    }
+            // Per buitenunit één rapport: binnenunits van dezelfde buitenunit meten
+            // dezelfde sensor. Lukt het bij de eerste niet, dan de volgende proberen.
+            val perOutdoorUnit = coroutineScope {
+                outdoorGroups(units).map { ids ->
+                    async { ids.firstNotNullOfOrNull { id -> outdoorReadingOrNull(id) }?.value }
                 }.awaitAll()
-            }
-            val perOutdoorUnit = readings
-                .filter { it.second != null }
-                .groupBy({ it.first }, { it.second!! })
-                .map { (_, rs) -> rs.maxBy { it.time }.value }
+            }.filterNotNull()
             if (perOutdoorUnit.isNotEmpty()) {
                 outdoorFetchedAt = System.currentTimeMillis()
                 _state.update { it.copy(outdoorTemperature = perOutdoorUnit.average()) }
             }
         }
+    }
+
+    private suspend fun outdoorReadingOrNull(unitId: String) = try {
+        api.latestOutdoorReading(unitId)
+    } catch (e: Exception) {
+        if (e is kotlinx.coroutines.CancellationException) throw e
+        null // Buitentemperatuur is bijzaak: stil overslaan.
     }
 
     // ---------- Automatisch verversen ----------
@@ -310,6 +314,9 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
             delay(900)
             val latest = _state.value.units.firstOrNull { it.id == unit.id } ?: return@launch
             pushUpdate(unit.id, mapOf("setTemperature" to latest.setTemperature))
+            // Tot de controle-refresh "in behandeling" blijven (zoals voorheen): zo lang
+            // overschrijft een tussentijdse refresh je nieuwe temperatuur niet.
+            delay(SETTLE_MS)
         }
     }
 
@@ -324,10 +331,23 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
         try {
             api.update(unitId, values)
             // MELCloud verwerkt de wijziging met wat vertraging; daarna de echte stand ophalen.
-            delay(4000)
-            refresh()
+            refreshAfterChanges()
         } catch (e: Exception) {
             handleError(e)
+            refresh()
+        }
+    }
+
+    private var settleJob: Job? = null
+
+    /**
+     * Eén refresh, 4 s na de láátste wijziging. Snel achter elkaar tikken of
+     * "Alles uit" over vijf units kost zo één verzoek in plaats van één per wijziging.
+     */
+    private fun refreshAfterChanges() {
+        settleJob?.cancel()
+        settleJob = viewModelScope.launch {
+            delay(SETTLE_MS)
             refresh()
         }
     }

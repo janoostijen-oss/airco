@@ -12,8 +12,8 @@ android {
         applicationId = "nl.jan.airco"
         minSdk = 26
         targetSdk = 35
-        versionCode = 18
-        versionName = "3.0"
+        versionCode = 19
+        versionName = "3.1"
     }
 
     // Vaste debug-sleutel in de repo, zodat elke nieuwe build als update
@@ -64,9 +64,6 @@ dependencies {
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.material:material-icons-core")
-    implementation("androidx.compose.ui:ui-tooling-preview")
-    debugImplementation("androidx.compose.ui:ui-tooling")
 
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.activity:activity-compose:1.9.3")
@@ -76,6 +73,7 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("org.robolectric:robolectric:4.14.1")
     testImplementation("androidx.test.ext:junit:1.2.1")
     testImplementation(composeBom)

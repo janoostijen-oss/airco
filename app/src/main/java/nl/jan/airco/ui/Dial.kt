@@ -29,7 +29,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -88,8 +88,9 @@ fun TemperatureDial(
     val span = (range.endInclusive - range.start).takeIf { it > 0 } ?: 1.0
     val fracTarget = ((shown - range.start) / span).toFloat().coerceIn(0f, 1f)
     // Volgt de vinger direct tijdens slepen; animeert bij wijzigingen van buitenaf.
+    // Geanimeerde waarden worden alleen in de teken-/layerfase gelezen: een animatie
+    // tekent dan opnieuw zonder de hele knop (teksten, vlakken) te hercomponeren.
     val frac by animateFloatAsState(fracTarget, if (dragging) snap() else tween(220), label = "frac")
-    val deg = -135f + frac * 270f
     // Het streepje op de knop toont de kamertemperatuur, op dezelfde schaal als de boog
     // (buiten het bereik: tegen de rand). Zo zie je in één oogopslag hoe ver doel en kamer uiteen liggen.
     val currentFrac by animateFloatAsState(
@@ -97,7 +98,6 @@ fun TemperatureDial(
         tween(400),
         label = "current",
     )
-    val currentDeg = -135f + currentFrac * 270f
     val grab by animateFloatAsState(if (dragging || pressed) 1f else 0f, tween(120), label = "grab")
 
     val haptics = LocalHapticFeedback.current
@@ -324,7 +324,7 @@ fun TemperatureDial(
                 .align(Alignment.Center)
                 .size(204.dp)
                 .shadow(24.dp, CircleShape, ambientColor = Color.Black, spotColor = Color.Black)
-                .background(Brush.linearGradient(listOf(Color(0xFF2C313C), Color(0xFF11141A))), CircleShape)
+                .background(KnobOuter, CircleShape)
                 .border(1.dp, Ink.white(0.06f), CircleShape),
             contentAlignment = Alignment.Center,
         ) {
@@ -332,21 +332,14 @@ fun TemperatureDial(
                 Modifier
                     .size(184.dp)
                     .clip(CircleShape)
-                    .background(
-                        Brush.sweepGradient(
-                            listOf(
-                                Color(0xFF252A34), Color(0xFF3B414D), Color(0xFF1F232B), Color(0xFF363C48),
-                                Color(0xFF22262F), Color(0xFF3B414D), Color(0xFF252A34),
-                            ),
-                        ),
-                    )
+                    .background(KnobRibs)
                     .border(1.dp, Ink.white(0.05f), CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
                 if (current != null) Box(
                     Modifier
                         .size(184.dp)
-                        .rotate(currentDeg)
+                        .graphicsLayer { rotationZ = -135f + currentFrac * 270f }
                         .semantics { contentDescription = "Kamertemperatuur ${fmtTemp(current)} graden" },
                 ) {
                     Box(
@@ -361,10 +354,7 @@ fun TemperatureDial(
                 Column(
                     Modifier
                         .size(128.dp)
-                        .background(
-                            Brush.radialGradient(listOf(Color(0xFF1D212A), Color(0xFF0E1116))),
-                            CircleShape,
-                        )
+                        .background(KnobCenter, CircleShape)
                         .border(1.dp, Ink.white(0.05f), CircleShape),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
@@ -413,7 +403,7 @@ fun TemperatureDial(
         Canvas(Modifier.fillMaxSize()) {
             val center = Offset(size.width / 2, size.height / 2)
             val unit = size.width / 320f
-            rotate(deg, center) {
+            rotate(-135f + frac * 270f, center) {
                 val p = Offset(center.x, center.y - 128 * unit)
                 drawCircle(
                     brush = Brush.radialGradient(
@@ -438,6 +428,17 @@ fun TemperatureDial(
         }
     }
 }
+
+// Vaste verlopen van de knop: één keer aanmaken in plaats van bij elke recompositie.
+private val KnobOuter = Brush.linearGradient(listOf(Color(0xFF2C313C), Color(0xFF11141A)))
+private val KnobRibs = Brush.sweepGradient(
+    listOf(
+        Color(0xFF252A34), Color(0xFF3B414D), Color(0xFF1F232B), Color(0xFF363C48),
+        Color(0xFF22262F), Color(0xFF3B414D), Color(0xFF252A34),
+    ),
+)
+private val KnobCenter = Brush.radialGradient(listOf(Color(0xFF1D212A), Color(0xFF0E1116)))
+private val MiniCenter = Brush.radialGradient(listOf(Color(0xFF222631), Color(0xFF0F1217)))
 
 /** Kleine, niet-interactieve versie voor de kaarten in het overzicht (104dp). */
 @Composable
@@ -483,7 +484,7 @@ fun MiniDial(
             Modifier
                 .size(72.dp)
                 .shadow(10.dp, CircleShape)
-                .background(Brush.radialGradient(listOf(Color(0xFF222631), Color(0xFF0F1217))), CircleShape)
+                .background(MiniCenter, CircleShape)
                 .border(1.dp, Ink.white(0.05f), CircleShape),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,

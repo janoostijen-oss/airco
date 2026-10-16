@@ -54,14 +54,27 @@ val Manrope = FontFamily(
 /** Kleurpaar per modus: c1 = licht/warm uiteinde, c2 = verzadigd uiteinde. */
 data class ModeStyle(val c1: Color, val c2: Color, val verb: String, val icon: ImageVector)
 
-fun Mode?.style(): ModeStyle = when (this) {
-    Mode.Heat -> ModeStyle(Color(0xFFFFC15A), Color(0xFFFF5A36), "Verwarmen", Icons.Warm)
-    Mode.Cool -> ModeStyle(Color(0xFF62E6FF), Color(0xFF3F6BFF), "Koelen", Icons.Cool)
-    Mode.Dry -> ModeStyle(Color(0xFF8AF5D0), Color(0xFF16B59E), "Ontvochtigen", Icons.Dry)
-    Mode.Fan -> ModeStyle(Color(0xFFD7DEEC), Color(0xFF8391AD), "Ventileren", Icons.Fan)
-    Mode.Automatic -> ModeStyle(Color(0xFF4DA8FF), Color(0xFFFF2E7E), "Automatisch", Icons.Auto)
-    null -> ModeStyle(Color(0xFFD7DEEC), Color(0xFF8391AD), "—", Icons.Fan)
+/** Vaste stijlen: één object per modus, niet bij elke recompositie een nieuw. */
+private object ModeStyles {
+    val Heat = ModeStyle(Color(0xFFFFC15A), Color(0xFFFF5A36), "Verwarmen", Icons.Warm)
+    val Cool = ModeStyle(Color(0xFF62E6FF), Color(0xFF3F6BFF), "Koelen", Icons.Cool)
+    val Dry = ModeStyle(Color(0xFF8AF5D0), Color(0xFF16B59E), "Ontvochtigen", Icons.Dry)
+    val Fan = ModeStyle(Color(0xFFD7DEEC), Color(0xFF8391AD), "Ventileren", Icons.Fan)
+    val Automatic = ModeStyle(Color(0xFF4DA8FF), Color(0xFFFF2E7E), "Automatisch", Icons.Auto)
+    val Unknown = ModeStyle(Color(0xFFD7DEEC), Color(0xFF8391AD), "—", Icons.Fan)
 }
+
+fun Mode?.style(): ModeStyle = when (this) {
+    Mode.Heat -> ModeStyles.Heat
+    Mode.Cool -> ModeStyles.Cool
+    Mode.Dry -> ModeStyles.Dry
+    Mode.Fan -> ModeStyles.Fan
+    Mode.Automatic -> ModeStyles.Automatic
+    null -> ModeStyles.Unknown
+}
+
+/** Kamertemperatuur als label: "21,5°", of "–°" als de unit niets meldt. */
+fun fmtRoom(t: Double?): String = "${t?.let(::fmtTemp) ?: "–"}°"
 
 /** Iconen: exact de SVG-paden uit het ontwerp (24×24, lijnen). */
 object Icons {

@@ -16,7 +16,6 @@ import java.net.URLDecoder
 import java.net.URLEncoder
 import java.security.MessageDigest
 import java.security.SecureRandom
-import java.util.concurrent.TimeUnit
 
 /** MELCloud weigert e-mail/wachtwoord. */
 class BadCredentialsException(message: String) : Exception(message)
@@ -45,10 +44,8 @@ object Auth {
     private const val COGNITO_AUTHORITY = "https://live-melcloudhome.auth.eu-west-1.amazoncognito.com"
     private const val MAX_REDIRECTS = 20
 
-    private val http = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .build()
+    // Dezelfde client als de API (gedeelde pool en threads), pas bij gebruik aangemaakt.
+    private val http: OkHttpClient get() = Http.client
     private val random = SecureRandom()
 
     /** Alles wat de WebView nodig heeft, plus de verifier voor de token-exchange. */

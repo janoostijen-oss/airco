@@ -6,7 +6,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
@@ -15,7 +14,6 @@ import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
-import java.util.concurrent.TimeUnit
 
 class NotLoggedInException(
     message: String = "Log opnieuw in",
@@ -36,10 +34,6 @@ class RateLimitedException : IOException("MELCloud vraagt even rustig aan te doe
  * geweigerd wordt, krijg je het loginscherm.
  */
 class MelcloudApi(private val tokens: TokenStore, private val credentials: CredentialStore) {
-    private val http = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .build()
     private val authLock = Mutex()
     private val json = "application/json; charset=utf-8".toMediaType()
 
@@ -48,8 +42,12 @@ class MelcloudApi(private val tokens: TokenStore, private val credentials: Crede
     /** Inloggen vanuit het formulier; bij succes worden tokens én gegevens bewaard. */
     suspend fun login(username: String, password: String) {
         val fresh = Auth.loginWithPassword(username, password)
-        tokens.save(fresh)
-        credentials.save(CredentialStore.Credentials(username, password))
+        // Versleutelen (en de eerste keer de sleutel aanmaken) via de Keystore kan
+        // tientallen ms duren: niet op de UI-thread.
+        withContext(Dispatchers.IO) {
+            tokens.save(fresh)
+            credentials.save(CredentialStore.Credentials(username, password))
+        }
     }
 
     /** Inloggen via de reserve-WebView: alleen tokens, geen wachtwoord bekend. */
@@ -83,9 +81,7 @@ class MelcloudApi(private val tokens: TokenStore, private val credentials: Crede
      * uit het trendrapport van de laatste 24 uur. `null` als er niets is.
      */
     suspend fun latestOutdoorReading(unitId: String): Reading? {
-        // Het rapport wil .NET-stijl UTC-tijden met 7 nullen achter de seconde
-        // (anders geeft het een leeg venster; zie melcloud-api `toReportDate`).
-        val fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").withZone(ZoneOffset.UTC)
+        val fmt = REPORT_DATE
         val now = Instant.now().truncatedTo(ChronoUnit.SECONDS)
         val url = "$BASE_URL/report/v1/trendsummary".toHttpUrl().newBuilder()
             .addQueryParameter("unitId", unitId)
@@ -102,17 +98,17 @@ class MelcloudApi(private val tokens: TokenStore, private val credentials: Crede
         send { Request.Builder().url("$BASE_URL/monitor/ataunit/$unitId").put(payload) }
     }
 
-    /** Verstuurt met Bearer-token; bij een 401 eenmaal sessie herstellen en opnieuw proberen. */
-    private suspend fun send(build: () -> Request.Builder): String {
+    /**
+     * Verstuurt met Bearer-token; bij een 401 eenmaal sessie herstellen en opnieuw proberen.
+     * Alles op IO: ook het token-beheer, want stil opnieuw inloggen ontsleutelt het
+     * wachtwoord via de Keystore. Annuleren breekt het lopende verzoek echt af.
+     */
+    private suspend fun send(build: () -> Request.Builder): String = withContext(Dispatchers.IO) {
         var token = validAccessToken(forceRefresh = false)
         repeat(2) { attempt ->
-            val (code, text) = withContext(Dispatchers.IO) {
-                http.newCall(build().header("Authorization", "Bearer $token").build()).execute().use { r ->
-                    r.code to r.body?.string().orEmpty()
-                }
-            }
+            val (code, text) = Http.client.newCall(build().header("Authorization", "Bearer $token").build()).await()
             when {
-                code in 200..299 -> return text
+                code in 200..299 -> return@withContext text
                 code == 401 && attempt == 0 -> token = validAccessToken(forceRefresh = true)
                 code == 401 -> throw NotLoggedInException()
                 code == 429 -> throw RateLimitedException()
@@ -158,5 +154,13 @@ class MelcloudApi(private val tokens: TokenStore, private val credentials: Crede
     private companion object {
         const val BASE_URL = "https://mobile.bff.melcloudhome.com"
         const val REFRESH_AHEAD_MS = 5 * 60 * 1000L
+
+        /**
+         * Het rapport wil .NET-stijl UTC-tijden met 7 nullen achter de seconde
+         * (anders geeft het een leeg venster; zie melcloud-api `toReportDate`).
+         * Thread-safe, dus één keer aanmaken.
+         */
+        val REPORT_DATE: DateTimeFormatter =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSSSSS").withZone(ZoneOffset.UTC)
     }
 }

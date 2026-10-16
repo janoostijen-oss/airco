@@ -66,7 +66,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -80,6 +79,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.heightIn
@@ -296,7 +296,7 @@ private fun Header(
                 color = Ink.Text,
             )
         }
-        GlassIconButton(Icons.Refresh, "Vernieuwen", iconRotation = spinAnim) {
+        GlassIconButton(Icons.Refresh, "Vernieuwen", iconRotation = { spinAnim }) {
             spin += 360f
             vm.refresh(userInitiated = true)
         }
@@ -329,7 +329,8 @@ private fun MoreMenuButton(vm: AircoActions) {
 private fun GlassIconButton(
     icon: ImageVector,
     label: String,
-    iconRotation: Float = 0f,
+    /** Gelezen in de layerfase, zodat het draaien geen recompositie per frame kost. */
+    iconRotation: (() -> Float)? = null,
     tint: Color = Ink.IconSoft,
     onClick: () -> Unit,
 ) {
@@ -344,7 +345,14 @@ private fun GlassIconButton(
             .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp).rotate(iconRotation))
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier
+                .size(20.dp)
+                .then(if (iconRotation != null) Modifier.graphicsLayer { rotationZ = iconRotation() } else Modifier),
+        )
     }
 }
 
@@ -479,7 +487,7 @@ private fun DetailHeader(
             )
             Row {
                 Text(
-                    "Kamer ${unit.roomTemperature?.let(::fmtTemp) ?: "–"}° · ",
+                    "Kamer ${fmtRoom(unit.roomTemperature)} · ",
                     fontFamily = Manrope,
                     fontWeight = FontWeight.Medium,
                     fontSize = statusSize,
@@ -633,7 +641,8 @@ private fun PowerToggle(
     ) {
         Box(
             Modifier
-                .offset(x = knobX, y = 3.dp)
+                // Lambda-offset: de veer-animatie verschuift alleen, zonder recompositie per frame.
+                .offset { IntOffset(knobX.roundToPx(), 3.dp.roundToPx()) }
                 .size(knob)
                 .shadow(5.dp, CircleShape)
                 .background(Brush.linearGradient(listOf(Color.White, Color(0xFFD9DEE8))), CircleShape),
@@ -961,10 +970,8 @@ private fun Overview(units: List<AircoUnit>, outdoorTemperature: Double?, vm: Ai
 @Composable
 private fun SummaryStrip(units: List<AircoUnit>, outdoorTemperature: Double?, vm: AircoActions) {
     // Gemiddelde van alle buitenunits, elk met de meest recente meting (berekend in het ViewModel).
-    val outdoor = outdoorTemperature?.let { fmtTemp(kotlin.math.round(it * 10) / 10) } ?: "–"
+    val outdoor = outdoorLabel(outdoorTemperature)
     val onCount = units.count { it.power }
-    val view = LocalView.current
-    val anyOn = onCount > 0
     val shape = RoundedCornerShape(22.dp)
 
     Row(
@@ -994,33 +1001,59 @@ private fun SummaryStrip(units: List<AircoUnit>, outdoorTemperature: Double?, vm
                 )
             }
         }
-        val btnShape = RoundedCornerShape(15.dp)
-        Row(
-            Modifier
-                .height(46.dp)
-                .shadow(8.dp, btnShape)
-                .clip(btnShape)
-                .background(Brush.linearGradient(listOf(Color(0xFF262B36), Color(0xFF161920))))
-                .border(1.dp, Ink.white(0.12f), btnShape)
-                .clickable(role = Role.Button) {
-                    view.powerHaptic(turningOn = !anyOn)
-                    vm.setAllPower(!anyOn)
-                }
-                .padding(horizontal = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Icon(Icons.Power, contentDescription = null, tint = Ink.TextStrong, modifier = Modifier.size(15.dp))
-            Text(
-                if (anyOn) "Alles uit" else "Alles aan",
-                fontFamily = Manrope,
-                fontWeight = FontWeight.Bold,
-                fontSize = 13.sp,
-                color = Ink.TextStrong,
-            )
-        }
+        AllPowerButton(
+            anyOn = onCount > 0,
+            vm = vm,
+            modifier = Modifier.height(46.dp),
+            corner = 15.dp,
+            iconSize = 15.dp,
+            contentPadding = 14.dp,
+        )
     }
 }
+
+/** "Buiten"-waarde: op 0,1° afgerond, of "–" zolang er geen meting is. */
+private fun outdoorLabel(t: Double?): String = t?.let { fmtTemp(kotlin.math.round(it * 10) / 10) } ?: "–"
+
+/** "Alles uit" / "Alles aan" voor alle bereikbare units, met de aan/uit-haptiek. */
+@Composable
+private fun AllPowerButton(
+    anyOn: Boolean,
+    vm: AircoActions,
+    modifier: Modifier,
+    corner: Dp,
+    iconSize: Dp,
+    contentPadding: Dp = 0.dp,
+    arrangement: Arrangement.Horizontal = Arrangement.spacedBy(8.dp),
+) {
+    val view = LocalView.current
+    val shape = RoundedCornerShape(corner)
+    Row(
+        modifier
+            .shadow(8.dp, shape)
+            .clip(shape)
+            .background(AllPowerBrush)
+            .border(1.dp, Ink.white(0.12f), shape)
+            .clickable(role = Role.Button) {
+                view.powerHaptic(turningOn = !anyOn)
+                vm.setAllPower(!anyOn)
+            }
+            .padding(horizontal = contentPadding),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = arrangement,
+    ) {
+        Icon(Icons.Power, contentDescription = null, tint = Ink.TextStrong, modifier = Modifier.size(iconSize))
+        Text(
+            if (anyOn) "Alles uit" else "Alles aan",
+            fontFamily = Manrope,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            color = Ink.TextStrong,
+        )
+    }
+}
+
+private val AllPowerBrush = Brush.linearGradient(listOf(Color(0xFF262B36), Color(0xFF161920)))
 
 @Composable
 private fun SummaryStat(label: String, modifier: Modifier, value: @Composable () -> Unit) {
@@ -1159,7 +1192,7 @@ private fun RoomOverviewCard(unit: AircoUnit, vm: AircoActions, onOpen: () -> Un
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
                         Text("KAMER", fontFamily = Manrope, fontWeight = FontWeight.Bold, fontSize = 10.sp, letterSpacing = 1.6.sp, color = Ink.Dim)
                         Text(
-                            "${unit.roomTemperature?.let(::fmtTemp) ?: "–"}°",
+                            fmtRoom(unit.roomTemperature),
                             fontFamily = Sora,
                             fontWeight = FontWeight.Light,
                             fontSize = 20.sp,
@@ -1364,7 +1397,7 @@ private fun CurrentTempTile(unit: AircoUnit, modifier: Modifier) {
             modifier = Modifier.weight(1f),
         )
         Text(
-            "${unit.roomTemperature?.let(::fmtTemp) ?: "–"}°",
+            fmtRoom(unit.roomTemperature),
             fontFamily = Sora,
             fontWeight = FontWeight.Light,
             fontSize = 24.sp,
@@ -1376,10 +1409,8 @@ private fun CurrentTempTile(unit: AircoUnit, modifier: Modifier) {
 /** Foldable-samenvatting: Buiten | Actief, met "Alles uit/aan" over de volle breedte eronder. */
 @Composable
 private fun CompactSummary(units: List<AircoUnit>, outdoorTemperature: Double?, vm: AircoActions) {
-    val outdoor = outdoorTemperature?.let { fmtTemp(kotlin.math.round(it * 10) / 10) } ?: "–"
+    val outdoor = outdoorLabel(outdoorTemperature)
     val onCount = units.count { it.power }
-    val anyOn = onCount > 0
-    val view = LocalView.current
     val shape = RoundedCornerShape(20.dp)
     Column(
         Modifier
@@ -1409,31 +1440,14 @@ private fun CompactSummary(units: List<AircoUnit>, outdoorTemperature: Double?, 
                 }
             }
         }
-        val btnShape = RoundedCornerShape(14.dp)
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .height(44.dp)
-                .shadow(8.dp, btnShape)
-                .clip(btnShape)
-                .background(Brush.linearGradient(listOf(Color(0xFF262B36), Color(0xFF161920))))
-                .border(1.dp, Ink.white(0.12f), btnShape)
-                .clickable(role = Role.Button) {
-                    view.powerHaptic(turningOn = !anyOn)
-                    vm.setAllPower(!anyOn)
-                },
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-        ) {
-            Icon(Icons.Power, contentDescription = null, tint = Ink.TextStrong, modifier = Modifier.size(14.dp))
-            Text(
-                if (anyOn) "Alles uit" else "Alles aan",
-                fontFamily = Manrope,
-                fontWeight = FontWeight.Bold,
-                fontSize = 13.sp,
-                color = Ink.TextStrong,
-            )
-        }
+        AllPowerButton(
+            anyOn = onCount > 0,
+            vm = vm,
+            modifier = Modifier.fillMaxWidth().height(44.dp),
+            corner = 14.dp,
+            iconSize = 14.dp,
+            arrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+        )
     }
 }
 
@@ -1519,7 +1533,7 @@ private fun RoomListRow(unit: AircoUnit, selected: Boolean, wide: Boolean, vm: A
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            val temp = "${unit.roomTemperature?.let(::fmtTemp) ?: "–"}°"
+            val temp = fmtRoom(unit.roomTemperature)
             if (wide) {
                 Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(temp, fontFamily = Sora, fontWeight = FontWeight.Light, fontSize = 22.sp, color = Color(0xFFE4E8EF))

@@ -314,6 +314,12 @@ private fun WebLogin(state: UiState, vm: AircoViewModel) {
                         loadUrl(url)
                     }
                 },
+                // Weg uit beeld (ingelogd, terug, nieuwe URL): renderer en geheugen direct vrijgeven.
+                onRelease = { web ->
+                    web.stopLoading()
+                    web.webViewClient = WebViewClient()
+                    web.destroy()
+                },
             )
         }
     }

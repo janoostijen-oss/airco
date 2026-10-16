@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Airco" parent="android:Theme.Material.Light.NoActionBar" />
+    <!--
+      Donker vanaf het eerste frame: de vensterachtergrond (en op Android 12+ het
+      opstartscherm) heeft de grondkleur van de app, dus geen witte flits voordat
+      Compose tekent.
+    -->
+    <style name="Theme.Airco" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/ground</item>
+    </style>
 </resources>

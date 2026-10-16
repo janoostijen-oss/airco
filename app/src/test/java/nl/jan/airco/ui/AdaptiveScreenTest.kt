@@ -164,6 +164,32 @@ class AdaptiveScreenTest {
         assertEquals(listOf("kantoor" to 1), actions.tempSteps)
     }
 
+    // --------------------------------------------------------------- "Alles uit/aan"
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun telefoon_allesUitAlsErEenAanStaat() {
+        show()
+        rule.onNode(hasText("Alles uit") and hasAnyAncestor(hasTestTag(TestTags.OVERVIEW))).performClick()
+        assertEquals(listOf(false), actions.allPowerCalls)
+    }
+
+    @Test
+    @Config(qualifiers = "w700dp-h840dp")
+    fun foldable_allesUitInCompacteSamenvatting() {
+        show()
+        rule.onNode(hasText("Alles uit") and hasAnyAncestor(hasTestTag(TestTags.LIST_PANE))).performClick()
+        assertEquals(listOf(false), actions.allPowerCalls)
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp-land")
+    fun tablet_allesUitInSamenvatting() {
+        show()
+        rule.onNode(hasText("Alles uit") and hasAnyAncestor(hasTestTag(TestTags.LIST_PANE))).performClick()
+        assertEquals(listOf(false), actions.allPowerCalls)
+    }
+
     private fun density(): Float =
         androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
             .resources.displayMetrics.density
@@ -173,12 +199,13 @@ class AdaptiveScreenTest {
 private class FakeActions : AircoActions {
     val powerCalls = mutableListOf<Pair<String, Boolean>>()
     val tempSteps = mutableListOf<Pair<String, Int>>()
+    val allPowerCalls = mutableListOf<Boolean>()
     override fun onForeground() {}
     override fun onBackground() {}
     override fun clearMessage() {}
     override fun refresh(userInitiated: Boolean, background: Boolean) {}
     override fun logout() {}
-    override fun setAllPower(on: Boolean) {}
+    override fun setAllPower(on: Boolean) { allPowerCalls += on }
     override fun setPower(unit: AircoUnit, on: Boolean) { powerCalls += unit.id to on }
     override fun setMode(unit: AircoUnit, mode: Mode) {}
     override fun setFanSpeed(unit: AircoUnit, speed: FanSpeed) {}
