@@ -45,6 +45,8 @@ data class UiState(
     val loadError: String? = null,
     /** Gemiddelde buitentemperatuur over alle buitenunits (meest recente meting elk). */
     val outdoorTemperature: Double? = null,
+    /** Buitentemperatuur t.o.v. een half uur geleden: 1 warmer, -1 kouder, 0 gelijk, `null` onbekend. */
+    val outdoorTrend: Int? = null,
     /** Totaal stroomverbruik vandaag (kWh) van alle units die meten; `null` = onbekend. */
     val energyTodayKwh: Double? = null,
     /** Totaal verbruik gisteren (hele dag, kWh); `null` = (nog) onbekend. */
@@ -189,20 +191,26 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
         outdoorJob = viewModelScope.launch {
             // Per buitenunit één rapport: binnenunits van dezelfde buitenunit meten
             // dezelfde sensor. Lukt het bij de eerste niet, dan de volgende proberen.
-            val perOutdoorUnit = coroutineScope {
+            val series = coroutineScope {
                 outdoorGroups(units).map { ids ->
-                    async { ids.firstNotNullOfOrNull { id -> outdoorReadingOrNull(id) }?.value }
+                    async { ids.firstNotNullOfOrNull { id -> outdoorSeriesOrNull(id)?.takeIf { it.isNotEmpty() } } }
                 }.awaitAll()
             }.filterNotNull()
-            if (perOutdoorUnit.isNotEmpty()) {
+            if (series.isNotEmpty()) {
                 outdoorFetchedAt = System.currentTimeMillis()
-                _state.update { it.copy(outdoorTemperature = perOutdoorUnit.average()) }
+                val now = Instant.now()
+                _state.update {
+                    it.copy(
+                        outdoorTemperature = series.map { s -> s.last().value }.average(),
+                        outdoorTrend = outdoorTrend(series, now),
+                    )
+                }
             }
         }
     }
 
-    private suspend fun outdoorReadingOrNull(unitId: String) = try {
-        api.latestOutdoorReading(unitId)
+    private suspend fun outdoorSeriesOrNull(unitId: String) = try {
+        api.outdoorSeries(unitId)
     } catch (e: Exception) {
         if (e is kotlinx.coroutines.CancellationException) throw e
         null // Buitentemperatuur is bijzaak: stil overslaan.

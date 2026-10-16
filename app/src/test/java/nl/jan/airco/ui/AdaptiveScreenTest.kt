@@ -41,7 +41,7 @@ class AdaptiveScreenTest {
     private val actions = FakeActions()
 
     private fun show(state: UiState = UiState(
-        screen = Screen.Units, units = sampleUnits(), outdoorTemperature = 8.5,
+        screen = Screen.Units, units = sampleUnits(), outdoorTemperature = 8.5, outdoorTrend = -1,
         energyTodayKwh = 5.63, energyYesterdayKwh = 11.04,
     )) {
         rule.setContent {
@@ -232,6 +232,35 @@ class AdaptiveScreenTest {
         rule.onNodeWithTag(TestTags.ENERGY_TODAY).performClick()
         rule.waitForIdle()
         rule.onNode(hasText("…") and hasAnyAncestor(hasTestTag(TestTags.ENERGY_TODAY)), useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    // --------------------------------------------------------------- trend buiten
+
+    @Test @Config(qualifiers = "w411dp-h891dp")
+    fun telefoon_trendpijltjeNaBuitentemperatuur() {
+        show()
+        rule.onNodeWithContentDescription("Buiten kouder dan een half uur geleden").assertIsDisplayed()
+        val temp = rule.onNodeWithText("8,5°").fetchSemanticsNode().boundsInRoot
+        val arrows = rule.onNodeWithTag(TestTags.OUTDOOR_TREND).fetchSemanticsNode().boundsInRoot
+        assertTrue("pijltjes staan rechts van de temperatuur", arrows.left >= temp.right)
+    }
+
+    @Test @Config(qualifiers = "w600dp-h800dp")
+    fun foldable_trendWarmer() {
+        show(UiState(screen = Screen.Units, units = sampleUnits(), outdoorTemperature = 8.5, outdoorTrend = 1))
+        rule.onNodeWithContentDescription("Buiten warmer dan een half uur geleden").assertIsDisplayed()
+    }
+
+    @Test @Config(qualifiers = "w1280dp-h800dp-land")
+    fun tablet_trendGelijk() {
+        show(UiState(screen = Screen.Units, units = sampleUnits(), outdoorTemperature = 8.5, outdoorTrend = 0))
+        rule.onNodeWithContentDescription("Buitentemperatuur gelijk gebleven").assertIsDisplayed()
+    }
+
+    @Test @Config(qualifiers = "w411dp-h891dp")
+    fun geenPijltjesZonderBuitentemperatuur() {
+        show(UiState(screen = Screen.Units, units = sampleUnits()))
+        rule.onNodeWithTag(TestTags.OUTDOOR_TREND).assertDoesNotExist()
     }
 
     @Test @Config(qualifiers = "w411dp-h891dp")

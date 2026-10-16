@@ -973,10 +973,12 @@ private fun Overview(state: UiState, vm: AircoActions, onOpen: (String) -> Unit)
 internal enum class SummarySize(
     val label: Int, val value: Int, val unit: Int, val kwhUnit: Int, val divider: Int, val gap: Int,
     val padStart: Int, val corner: Int, val button: Int, val buttonCorner: Int, val icon: Int,
+    /** Trendpijltjes achter de buitentemperatuur: breedte, hoogte, afstand tot het getal. */
+    val arrowW: Int, val arrowH: Int, val arrowGap: Int,
 ) {
-    Phone(11, 26, 15, 15, 40, 14, 18, 22, 46, 15, 15),
-    Foldable(10, 20, 12, 11, 34, 8, 16, 20, 44, 14, 14),
-    Tablet(11, 24, 14, 14, 38, 14, 18, 22, 46, 15, 15),
+    Phone(11, 26, 15, 15, 40, 14, 18, 22, 46, 15, 15, 8, 5, 6),
+    Foldable(10, 20, 12, 11, 34, 8, 16, 20, 44, 14, 14, 7, 4, 5),
+    Tablet(11, 24, 14, 14, 38, 14, 18, 22, 46, 15, 15, 8, 5, 6),
 }
 
 /**
@@ -1006,7 +1008,13 @@ private fun SummaryCard(state: UiState, vm: AircoActions, size: SummarySize) {
             horizontalArrangement = Arrangement.spacedBy(size.gap.dp),
         ) {
             SummaryStat("Buiten", size, Modifier.weight(1f)) {
-                StatValue("${outdoorLabel(outdoorTemperature)}°", null, size.value, size.unit)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    StatValue("${outdoorLabel(outdoorTemperature)}°", null, size.value, size.unit)
+                    if (outdoorTemperature != null) {
+                        Spacer(Modifier.width(size.arrowGap.dp))
+                        TrendArrows(state.outdoorTrend, size)
+                    }
+                }
             }
             StatDivider(size)
             EnergyStat(state, vm, size, Modifier.weight(1f))
@@ -1058,6 +1066,55 @@ private fun EnergyStat(state: UiState, vm: AircoActions, size: SummarySize, modi
         StatValue(text, if (kwh != null) " kWh" else null, size.value, size.kwhUnit)
     }
 }
+
+/**
+ * ▲ boven ▼: warmer dan een half uur geleden = ▲ in warm oranje, kouder = ▼ in
+ * koel blauw, gelijk of onbekend = beide gedimd.
+ */
+@Composable
+private fun TrendArrows(trend: Int?, size: SummarySize) {
+    val dim = Ink.white(0.16f)
+    val up by animateColorAsState(if (trend == 1) TrendWarm else dim, tween(250), label = "trendUp")
+    val down by animateColorAsState(if (trend == -1) TrendCool else dim, tween(250), label = "trendDown")
+    val description = when (trend) {
+        1 -> "Buiten warmer dan een half uur geleden"
+        -1 -> "Buiten kouder dan een half uur geleden"
+        0 -> "Buitentemperatuur gelijk gebleven"
+        else -> "Trend buitentemperatuur onbekend"
+    }
+    Column(
+        Modifier
+            .testTag(TestTags.OUTDOOR_TREND)
+            .semantics { contentDescription = description },
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Triangle(pointsUp = true, color = { up }, size = size)
+        Triangle(pointsUp = false, color = { down }, size = size)
+    }
+}
+
+@Composable
+private fun Triangle(pointsUp: Boolean, color: () -> Color, size: SummarySize) {
+    androidx.compose.foundation.Canvas(Modifier.size(width = size.arrowW.dp, height = size.arrowH.dp)) {
+        val path = androidx.compose.ui.graphics.Path().apply {
+            if (pointsUp) {
+                moveTo(this@Canvas.size.width / 2, 0f)
+                lineTo(this@Canvas.size.width, this@Canvas.size.height)
+                lineTo(0f, this@Canvas.size.height)
+            } else {
+                moveTo(this@Canvas.size.width / 2, this@Canvas.size.height)
+                lineTo(0f, 0f)
+                lineTo(this@Canvas.size.width, 0f)
+            }
+            close()
+        }
+        drawPath(path, color())
+    }
+}
+
+/** Zelfde tinten als de modi Warm (c1) en Koel (c1). */
+private val TrendWarm = Color(0xFFFFC15A)
+private val TrendCool = Color(0xFF62E6FF)
 
 @Composable
 private fun RowScope.StatDivider(size: SummarySize) {

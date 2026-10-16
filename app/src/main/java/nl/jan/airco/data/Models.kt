@@ -1,6 +1,12 @@
 package nl.jan.airco.data
 
 import org.json.JSONArray
+import java.time.Duration
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.OffsetDateTime
+import java.time.ZoneOffset
+import java.time.format.DateTimeParseException
 import org.json.JSONObject
 
 /** Werkingsmodi zoals de MELCloud Home API ze noemt. */
@@ -189,34 +195,33 @@ object EnergyParser {
     }
 }
 
-/** Eén meting: tijdstip (UTC, zoals de API het geeft) + waarde. */
-data class Reading(val time: String, val value: Double)
+/** Eén meting: tijdstip (UTC) + waarde. */
+data class Reading(val time: Instant, val value: Double)
 
 /**
- * Parser voor `/report/v1/trendsummary`: haalt de meest recente
- * buitentemperatuur uit de dataset `outside_temperature`. Valt terug op
- * `previousTriggers` (laatste meting vóór het venster) als er in het
- * venster zelf niets gemeten is.
+ * Parser voor `/report/v1/trendsummary`: de metingen van de buitentemperatuur
+ * (dataset `outside_temperature`), oud → nieuw. MELCloud meet onregelmatig
+ * (bij verandering); `previousTriggers` geeft de laatste meting vóór het venster.
  */
 object ReportParser {
     private const val OUTSIDE = "outside_temperature"
 
-    fun latestOutdoor(body: String): Reading? {
+    fun outdoorSeries(body: String): List<Reading> {
         val trimmed = body.trim()
         val reports: List<JSONObject> = when {
             trimmed.startsWith("[") -> JSONArray(trimmed).let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it) } }
             trimmed.startsWith("{") -> listOf(JSONObject(trimmed))
             else -> emptyList()
         }
-        var best: Reading? = null
-        fun consider(time: String, value: Double) {
+        val out = mutableListOf<Reading>()
+        fun add(time: String, value: Double) {
             if (value.isNaN()) return
-            val t = time.replace(' ', 'T')
-            if (best == null || t > best!!.time) best = Reading(t, value)
+            val t = parseUtc(time) ?: return
+            out += Reading(t, value)
         }
         for (report in reports) {
-            val datasets = report.optJSONArray("datasets") ?: continue
-            for (i in 0 until datasets.length()) {
+            val datasets = report.optJSONArray("datasets")
+            if (datasets != null) for (i in 0 until datasets.length()) {
                 val ds = datasets.optJSONObject(i) ?: continue
                 val isOutside = ds.optString("id") == OUTSIDE ||
                     ds.optString("label").contains("outside", ignoreCase = true)
@@ -225,20 +230,59 @@ object ReportParser {
                 for (j in 0 until data.length()) {
                     val p = data.optJSONObject(j) ?: continue
                     if (p.isNull("y")) continue
-                    consider(p.optString("x"), p.optDouble("y"))
+                    add(p.optString("x"), p.optDouble("y"))
                 }
             }
-        }
-        if (best == null) {
-            for (report in reports) {
-                val triggers = report.optJSONArray("previousTriggers") ?: continue
-                for (i in 0 until triggers.length()) {
-                    val t = triggers.optJSONObject(i) ?: continue
-                    if (t.optString("measure") != OUTSIDE || t.isNull("value")) continue
-                    consider(t.optString("trigger"), t.optDouble("value"))
-                }
+            val triggers = report.optJSONArray("previousTriggers")
+            if (triggers != null) for (i in 0 until triggers.length()) {
+                val t = triggers.optJSONObject(i) ?: continue
+                if (t.optString("measure") != OUTSIDE || t.isNull("value")) continue
+                add(t.optString("trigger"), t.optDouble("value"))
             }
         }
-        return best
+        return out.sortedBy { it.time }
+    }
+
+    /** "2026-10-16 17:00:00.0000000", "2026-10-16T17:00:00Z", … → tijdstip in UTC. */
+    internal fun parseUtc(raw: String): Instant? {
+        val s = raw.trim().replace(' ', 'T')
+        if (s.length < 19) return null
+        return try {
+            when {
+                s.endsWith("Z") || s.substring(19).contains('+') || s.substring(19).contains('-') ->
+                    OffsetDateTime.parse(s).toInstant()
+                else -> LocalDateTime.parse(s.substring(0, 19)).toInstant(ZoneOffset.UTC)
+            }
+        } catch (e: DateTimeParseException) {
+            null
+        }?.takeIf { it.atOffset(ZoneOffset.UTC).year < 9000 } // 9999-12-31 = "geen meting"
+    }
+}
+
+/** Waarde op tijdstip [at]: de laatste meting op of vóór dat moment (metingen staan oud → nieuw). */
+fun List<Reading>.valueAt(at: Instant): Double? = lastOrNull { !it.time.isAfter(at) }?.value
+
+/**
+ * Trend van de buitentemperatuur: gemiddelde nu tegenover [ago] geleden, over de
+ * buitenunits die op beide momenten een meting hebben. 1 = warmer, -1 = kouder,
+ * 0 = gelijk (verschil < [threshold]), `null` = te weinig data.
+ */
+fun outdoorTrend(
+    perOutdoorUnit: List<List<Reading>>,
+    now: Instant,
+    ago: Duration = Duration.ofMinutes(30),
+    threshold: Double = 0.1,
+): Int? {
+    val pairs = perOutdoorUnit.mapNotNull { series ->
+        val current = series.valueAt(now) ?: return@mapNotNull null
+        val before = series.valueAt(now.minus(ago)) ?: return@mapNotNull null
+        current to before
+    }
+    if (pairs.isEmpty()) return null
+    val diff = pairs.map { it.first }.average() - pairs.map { it.second }.average()
+    return when {
+        diff >= threshold - 1e-9 -> 1
+        diff <= -threshold + 1e-9 -> -1
+        else -> 0
     }
 }

@@ -80,7 +80,7 @@ class MelcloudApi(private val tokens: TokenStore, private val credentials: Crede
      * Meest recente buitentemperatuur die deze unit meldt (van zijn buitenunit),
      * uit het trendrapport van de laatste 24 uur. `null` als er niets is.
      */
-    suspend fun latestOutdoorReading(unitId: String): Reading? {
+    suspend fun outdoorSeries(unitId: String): List<Reading> {
         val fmt = REPORT_DATE
         val now = Instant.now().truncatedTo(ChronoUnit.SECONDS)
         val url = "$BASE_URL/report/v1/trendsummary".toHttpUrl().newBuilder()
@@ -90,7 +90,7 @@ class MelcloudApi(private val tokens: TokenStore, private val credentials: Crede
             .addQueryParameter("period", "Hourly")
             .build()
         val body = send { Request.Builder().url(url).get() }
-        return withContext(Dispatchers.Default) { ReportParser.latestOutdoor(body) }
+        return withContext(Dispatchers.Default) { ReportParser.outdoorSeries(body) }
     }
 
     /**
