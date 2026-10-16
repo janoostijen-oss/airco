@@ -217,8 +217,8 @@ class AdaptiveScreenTest {
             "volgorde: buiten=$buiten vandaag=$vandaag actief=$actief",
             buiten.center.x < vandaag.center.x && vandaag.center.x < actief.center.x,
         )
-        assertEquals("op één regel", buiten.top, vandaag.top, 1f)
-        assertEquals("op één regel", vandaag.top, actief.top, 1f)
+        assertEquals("op één regel: $buiten / $vandaag", buiten.top, vandaag.top, 1f)
+        assertEquals("op één regel: $vandaag / $actief", vandaag.top, actief.top, 1f)
     }
 
     private fun density(): Float =

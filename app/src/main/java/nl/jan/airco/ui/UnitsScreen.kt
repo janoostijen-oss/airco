@@ -84,6 +84,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.TextUnit
@@ -1001,7 +1002,13 @@ private fun SummaryCard(
             .padding(start = size.padStart.dp, end = 14.dp, top = 14.dp, bottom = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(size.gap.dp)) {
+        // Bovenkant uitgelijnd: de kopjes staan altijd op één lijn, ook als een waarde
+        // (met eenheid) net iets anders van hoogte is.
+        Row(
+            Modifier.height(IntrinsicSize.Min),
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(size.gap.dp),
+        ) {
             SummaryStat("Buiten", size, Modifier.weight(1f)) {
                 StatValue("${outdoorLabel(outdoorTemperature)}°", null, size.value, size.unit)
             }
@@ -1027,8 +1034,8 @@ private fun SummaryCard(
 }
 
 @Composable
-private fun StatDivider(size: SummarySize) {
-    Box(Modifier.width(1.dp).height(size.divider.dp).background(Ink.white(0.08f)))
+private fun RowScope.StatDivider(size: SummarySize) {
+    Box(Modifier.align(Alignment.CenterVertically).width(1.dp).height(size.divider.dp).background(Ink.white(0.08f)))
 }
 
 /** Grote waarde met optioneel een kleine, gedempte eenheid erachter ("kWh", "/ 3"). */
