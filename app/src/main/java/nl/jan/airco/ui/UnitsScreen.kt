@@ -85,6 +85,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.ui.platform.testTag
@@ -1236,9 +1237,12 @@ private fun SummaryStat(
         )
         // Vaste hoogte (iets ruimer dan twee regels): één of twee regels, het getal staat altijd even hoog.
         val twoLines = with(LocalDensity.current) { (size.label * 1.5f * 2).sp.toDp() }
-        Column(Modifier.height(twoLines), verticalArrangement = Arrangement.Bottom) {
-            Text(label.uppercase(), style = labelStyle, maxLines = 1, softWrap = false)
-            if (secondLine != null) Text(secondLine.uppercase(), style = labelStyle, maxLines = 1, softWrap = false)
+        Box(Modifier.height(twoLines), contentAlignment = Alignment.BottomStart) {
+            // Vrij meten (niet afknijpen door de vaste hoogte) en onderaan uitlijnen.
+            Column(Modifier.wrapContentHeight(align = Alignment.Bottom, unbounded = true)) {
+                Text(label.uppercase(), style = labelStyle, maxLines = 1, softWrap = false)
+                if (secondLine != null) Text(secondLine.uppercase(), style = labelStyle, maxLines = 1, softWrap = false)
+            }
         }
         value()
     }
