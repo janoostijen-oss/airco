@@ -52,6 +52,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -109,8 +111,22 @@ import nl.jan.airco.data.FanSpeed
 import nl.jan.airco.data.Mode
 
 
+/**
+ * Ids van units die "op temperatuur" zijn (huidig = doel). Als CompositionLocal,
+ * zodat alleen de onderdelen die het tonen opnieuw opbouwen als het verandert.
+ */
+internal val LocalAtTarget = compositionLocalOf { emptySet<String>() }
+
+@Composable
+private fun isAtTarget(unit: AircoUnit): Boolean = unit.id in LocalAtTarget.current
+
 @Composable
 fun UnitsScreen(state: UiState, vm: AircoActions) {
+    CompositionLocalProvider(LocalAtTarget provides state.atTarget) { UnitsScreenContent(state, vm) }
+}
+
+@Composable
+private fun UnitsScreenContent(state: UiState, vm: AircoActions) {
     // Op de voorgrond: automatisch verversen (ook IR-wijzigingen); weg: stoppen.
     LifecycleResumeEffect(Unit) {
         vm.onForeground()
@@ -488,14 +504,14 @@ private fun DetailHeader(
             )
             Row {
                 Text(
-                    "Kamer ${fmtRoom(unit.roomTemperature)} · ",
+                    "Huidig ${fmtRoom(unit.roomTemperature)} · ",
                     fontFamily = Manrope,
                     fontWeight = FontWeight.Medium,
                     fontSize = statusSize,
                     color = Ink.Muted2,
                 )
                 Text(
-                    statusText(unit),
+                    statusText(unit, isAtTarget(unit)),
                     fontFamily = Manrope,
                     fontWeight = FontWeight.Medium,
                     fontSize = statusSize,
@@ -541,6 +557,7 @@ private fun DialBlock(unit: AircoUnit, vm: AircoActions) {
                 style = style,
                 adjustable = enabled && range != null,
                 onChange = { vm.setTemperature(unit, it) },
+                atTarget = isAtTarget(unit),
                 modifier = Modifier.align(Alignment.TopCenter),
             )
             // −/+ in de opening onderaan de knop (bovenop, dus eerst aanraakbaar).
@@ -587,10 +604,18 @@ private fun Modifier.scaledBy(scale: Float): Modifier = if (scale >= 0.999f) thi
     }
 }
 
-private fun statusText(unit: AircoUnit): String {
+/** Huidige temperatuur: in de lichte modus-kleur als hij gelijk is aan het doel, anders lichtgrijs. */
+@Composable
+private fun roomTempColor(unit: AircoUnit): Color {
+    val target = if (isAtTarget(unit)) unit.mode.style().c1 else Color(0xFFE4E8EF)
+    return animateColorAsState(target, tween(400), label = "roomTemp").value
+}
+
+private fun statusText(unit: AircoUnit, atTarget: Boolean): String {
     if (!unit.isConnected) return "Offline"
     if (unit.isInError) return "Storing"
     if (!unit.power) return "Standby"
+    if (atTarget) return "Op temperatuur"
     val t = fmtTemp(unit.setTemperature)
     return when (unit.mode) {
         Mode.Fan -> "Ventileren"
@@ -1274,7 +1299,7 @@ private fun RoomOverviewCard(unit: AircoUnit, vm: AircoActions, onOpen: () -> Un
                     Icon(Icons.Chevron, contentDescription = null, tint = Ink.Dim, modifier = Modifier.size(16.dp))
                 }
                 Text(
-                    overviewStatus(unit),
+                    overviewStatus(unit, isAtTarget(unit)),
                     fontFamily = Manrope,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 12.sp,
@@ -1304,6 +1329,7 @@ private fun RoomOverviewCard(unit: AircoUnit, vm: AircoActions, onOpen: () -> Un
                 on = on,
                 style = style,
                 showTarget = range != null,
+                atTarget = isAtTarget(unit),
                 modifier = Modifier.clickable(role = Role.Button, onClickLabel = "Open ${unit.name}", onClick = onOpen),
             )
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1330,13 +1356,13 @@ private fun RoomOverviewCard(unit: AircoUnit, vm: AircoActions, onOpen: () -> Un
                 }
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                        Text("KAMER", fontFamily = Manrope, fontWeight = FontWeight.Bold, fontSize = 10.sp, letterSpacing = 1.6.sp, color = Ink.Dim)
+                        Text("HUIDIG", fontFamily = Manrope, fontWeight = FontWeight.Bold, fontSize = 10.sp, letterSpacing = 1.6.sp, color = Ink.Dim)
                         Text(
                             fmtRoom(unit.roomTemperature),
                             fontFamily = Sora,
                             fontWeight = FontWeight.Light,
                             fontSize = 20.sp,
-                            color = Color(0xFFE4E8EF),
+                            color = roomTempColor(unit),
                         )
                     }
                     RoundStepButton(
@@ -1374,10 +1400,11 @@ private fun Chip(content: @Composable RowScope.() -> Unit) {
     )
 }
 
-private fun overviewStatus(unit: AircoUnit): String {
+private fun overviewStatus(unit: AircoUnit, atTarget: Boolean): String {
     if (!unit.isConnected) return "Offline"
     if (unit.isInError) return "Storing"
     if (!unit.power) return "Uit · standby"
+    if (atTarget) return "Op temperatuur"
     val t = fmtTemp(unit.setTemperature)
     return when (unit.mode) {
         Mode.Fan -> "Ventileert"
@@ -1537,7 +1564,7 @@ private fun CurrentTempTile(unit: AircoUnit, modifier: Modifier) {
             fontFamily = Sora,
             fontWeight = FontWeight.Light,
             fontSize = 24.sp,
-            color = Color(0xFFE4E8EF),
+            color = roomTempColor(unit),
         )
     }
 }
@@ -1611,7 +1638,7 @@ private fun RoomListRow(unit: AircoUnit, selected: Boolean, wide: Boolean, vm: A
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    overviewStatus(unit),
+                    overviewStatus(unit, isAtTarget(unit)),
                     fontFamily = Manrope,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = if (wide) 12.sp else 11.sp,
@@ -1627,11 +1654,11 @@ private fun RoomListRow(unit: AircoUnit, selected: Boolean, wide: Boolean, vm: A
             val temp = fmtRoom(unit.roomTemperature)
             if (wide) {
                 Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(temp, fontFamily = Sora, fontWeight = FontWeight.Light, fontSize = 22.sp, color = Color(0xFFE4E8EF))
-                    Text("KAMER", fontFamily = Manrope, fontWeight = FontWeight.Bold, fontSize = 10.sp, letterSpacing = 1.6.sp, color = Ink.Dim)
+                    Text(temp, fontFamily = Sora, fontWeight = FontWeight.Light, fontSize = 22.sp, color = roomTempColor(unit))
+                    Text("HUIDIG", fontFamily = Manrope, fontWeight = FontWeight.Bold, fontSize = 10.sp, letterSpacing = 1.6.sp, color = Ink.Dim)
                 }
             } else {
-                Text(temp, fontFamily = Sora, fontWeight = FontWeight.Light, fontSize = 18.sp, color = Color(0xFFE4E8EF))
+                Text(temp, fontFamily = Sora, fontWeight = FontWeight.Light, fontSize = 18.sp, color = roomTempColor(unit))
             }
         }
         PowerToggle(

@@ -263,6 +263,37 @@ class AdaptiveScreenTest {
         rule.onNodeWithTag(TestTags.OUTDOOR_TREND).assertDoesNotExist()
     }
 
+    // --------------------------------------------------------------- op temperatuur
+
+    private fun reachedState() = UiState(
+        screen = Screen.Units, units = sampleUnits(), outdoorTemperature = 8.5, atTarget = setOf("kantoor"),
+    )
+
+    @Test @Config(qualifiers = "w411dp-h891dp")
+    fun telefoon_kaartToontOpTemperatuurEnHuidig() {
+        show(reachedState())
+        rule.onNode(hasText("Op temperatuur") and hasAnyAncestor(hasTestTag(TestTags.OVERVIEW))).assertIsDisplayed()
+        rule.onAllNodes(hasText("HUIDIG") and hasAnyAncestor(hasTestTag(TestTags.OVERVIEW))).fetchSemanticsNodes().let {
+            assertEquals("HUIDIG op elke kaart", 3, it.size)
+        }
+        rule.onAllNodes(hasText("KAMER")).fetchSemanticsNodes().let { assertEquals(0, it.size) }
+    }
+
+    @Test @Config(qualifiers = "w700dp-h840dp")
+    fun foldable_bedieningToontOpTemperatuur() {
+        show(reachedState())
+        rule.onNode(hasText("Huidig 22° · ") and hasAnyAncestor(hasTestTag(TestTags.DETAIL_PANE))).assertIsDisplayed()
+        rule.onNode(hasText("Op temperatuur") and hasAnyAncestor(hasTestTag(TestTags.DETAIL_PANE))).assertIsDisplayed()
+        rule.onNode(androidx.compose.ui.test.hasContentDescription("doel bereikt", substring = true)).assertExists()
+    }
+
+    @Test @Config(qualifiers = "w700dp-h840dp")
+    fun nietBereiktGeenOpTemperatuur() {
+        show()
+        rule.onAllNodes(hasText("Op temperatuur")).fetchSemanticsNodes().let { assertEquals(0, it.size) }
+        rule.onNode(hasText("Verwarmt naar 21°") and hasAnyAncestor(hasTestTag(TestTags.DETAIL_PANE))).assertIsDisplayed()
+    }
+
     @Test @Config(qualifiers = "w411dp-h891dp")
     fun vandaagStaatTussenBuitenEnActief() {
         show()

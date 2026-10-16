@@ -4,6 +4,8 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -72,6 +74,8 @@ fun TemperatureDial(
     adjustable: Boolean,
     glow: Float = 0.55f,
     onChange: (Double) -> Unit,
+    /** Huidig = doel: het streepje "klikt vast" in de greep (ring + status "Op temperatuur"). */
+    atTarget: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val c1 by animateColorAsState(if (on) style.c1 else Ink.OffC1, tween(350), label = "c1")
@@ -99,6 +103,10 @@ fun TemperatureDial(
         label = "current",
     )
     val grab by animateFloatAsState(if (dragging || pressed) 1f else 0f, tween(120), label = "grab")
+    // Niet tijdens slepen: dan verschuift het doel en klopt "bereikt" (nog) niet.
+    val reachedNow = atTarget && on && !dragging
+    // Eén keer ingroeien (600 ms) bij het bereiken; bij openen van het scherm staat hij er meteen.
+    val reach by animateFloatAsState(if (reachedNow) 1f else 0f, tween(600, easing = FastOutSlowInEasing), label = "reach")
 
     val haptics = LocalHapticFeedback.current
     val view = LocalView.current
@@ -112,7 +120,10 @@ fun TemperatureDial(
     Box(
         modifier
             .size(320.dp)
-            .semantics { contentDescription = "Doeltemperatuur ${fmtTemp(shown)} graden" }
+            .semantics {
+                contentDescription = "Doeltemperatuur ${fmtTemp(shown)} graden" +
+                    if (reachedNow && current != null) ", huidig ${fmtTemp(current)} graden, doel bereikt" else ""
+            }
             .then(
                 if (!adjustable) Modifier else Modifier.pointerInput(Unit) {
                     /*
@@ -347,7 +358,10 @@ fun TemperatureDial(
                 if (current != null) Box(
                     Modifier
                         .size(184.dp)
-                        .graphicsLayer { rotationZ = -135f + currentFrac * 270f }
+                        .graphicsLayer {
+                            rotationZ = -135f + currentFrac * 270f
+                            alpha = 1f - reach // valt samen met de greep: opgaan in de ring
+                        }
                         .semantics { contentDescription = "Kamertemperatuur ${fmtTemp(current)} graden" },
                 ) {
                     Box(
@@ -397,11 +411,15 @@ fun TemperatureDial(
                         }
                     }
                     Text(
-                        if (on) style.verb else "Uit",
+                        when {
+                            !on -> "Uit"
+                            reachedNow -> "Op temperatuur"
+                            else -> style.verb
+                        },
                         fontFamily = Manrope,
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 11.sp,
-                        color = c2,
+                        color = if (reachedNow) c1 else c2,
                     )
                 }
             }
@@ -413,16 +431,26 @@ fun TemperatureDial(
             val unit = size.width / 320f
             rotate(-135f + frac * 270f, center) {
                 val p = Offset(center.x, center.y - 128 * unit)
+                val glowColor = lerp(c2, c1, reach)
+                if (reach > 0f) {
+                    // "Vastgeklikt": dunne ring om de greep.
+                    drawCircle(
+                        color = c1.copy(alpha = 0.6f * reach),
+                        radius = 20 * unit * (0.7f + 0.3f * reach) + 4 * grab * unit,
+                        center = p,
+                        style = Stroke(1.5.dp.toPx()),
+                    )
+                }
                 drawCircle(
                     brush = Brush.radialGradient(
-                        listOf(c2.copy(alpha = 0.55f + 0.3f * grab), Color.Transparent),
+                        listOf(glowColor.copy(alpha = 0.55f + 0.3f * grab), Color.Transparent),
                         center = p,
                         radius = (30 + 10 * grab) * unit,
                     ),
                     radius = (30 + 10 * grab) * unit,
                     center = p,
                 )
-                drawCircle(c2.copy(alpha = 0.25f + 0.15f * grab), radius = (19 + 4 * grab) * unit, center = p)
+                drawCircle(glowColor.copy(alpha = 0.25f + 0.15f * grab), radius = (19 + 4 * grab) * unit, center = p)
                 drawCircle(
                     brush = Brush.radialGradient(
                         listOf(Color.White, Color(0xFFDCE1EA)),
@@ -467,6 +495,7 @@ fun MiniDial(
     on: Boolean,
     style: ModeStyle,
     showTarget: Boolean,
+    atTarget: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val c1 by animateColorAsState(if (on) style.c1 else Ink.OffC1, tween(350), label = "mc1")
@@ -478,6 +507,8 @@ fun MiniDial(
         label = "mfrac",
     )
     val numColor = if (on) Color(0xFFF4F6FA) else Ink.Dim
+    // Kaarten verversen vaak: geen ingroei-animatie, alleen een zachte overgang.
+    val reach by animateFloatAsState(if (atTarget && on) 1f else 0f, tween(300), label = "mreach")
 
     Box(modifier.size(104.dp), contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
@@ -543,8 +574,11 @@ fun MiniDial(
             val unit = size.width / 104f
             rotate(-135f + frac * 270f, center) {
                 val p = Offset(center.x, center.y - 47 * unit)
+                if (reach > 0f) {
+                    drawCircle(c1.copy(alpha = 0.6f * reach), radius = 11 * unit, center = p, style = Stroke(1.dp.toPx()))
+                }
                 drawCircle(
-                    brush = Brush.radialGradient(listOf(c2.copy(alpha = 0.5f), Color.Transparent), center = p, radius = 14 * unit),
+                    brush = Brush.radialGradient(listOf(lerp(c2, c1, reach).copy(alpha = 0.5f), Color.Transparent), center = p, radius = 14 * unit),
                     radius = 14 * unit,
                     center = p,
                 )

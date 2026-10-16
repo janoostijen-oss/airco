@@ -25,6 +25,7 @@ import nl.jan.airco.data.NotLoggedInException
 import nl.jan.airco.data.RateLimitedException
 import nl.jan.airco.data.TokenStore
 import nl.jan.airco.data.outdoorTrend
+import nl.jan.airco.data.AtTargetTracker
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -48,6 +49,8 @@ data class UiState(
     val outdoorTemperature: Double? = null,
     /** Buitentemperatuur t.o.v. een half uur geleden: 1 warmer, -1 kouder, 0 gelijk, `null` onbekend. */
     val outdoorTrend: Int? = null,
+    /** Units die "op temperatuur" zijn (huidig = doel), zie [nl.jan.airco.data.AtTargetTracker]. */
+    val atTarget: Set<String> = emptySet(),
     /** Totaal stroomverbruik vandaag (kWh) van alle units die meten; `null` = onbekend. */
     val energyTodayKwh: Double? = null,
     /** Totaal verbruik gisteren (hele dag, kWh); `null` = (nog) onbekend. */
@@ -350,6 +353,7 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
         if (background && refreshJob?.isActive == true) return
         refreshJob?.cancel()
         refreshJob = viewModelScope.launch {
+            val startedAt = System.currentTimeMillis()
             // Eerste keer laden (lege lijst) of zelf getrokken: laat zien dat er geladen wordt.
             // Anders stil op de achtergrond, zonder spinner die de lijst laat verspringen.
             _state.update {
@@ -367,8 +371,15 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
                         // Ongewijzigd? Houd hetzelfde object, dan slaat Compose die kaart over.
                         if (local != null && candidate == local) local else candidate
                     }
+                    // Eigen wijzigingen die al even onderweg waren, zijn nu door MELCloud verwerkt.
+                    changedAt.entries.removeAll { (id, at) ->
+                        at < startedAt - 3_000 && pendingTemp[id]?.isActive != true
+                    }
+                    val units = if (merged == s.units) s.units else merged
+                    val reached = atTarget.update(units, suppressed = changedAt.keys)
                     s.copy(
-                        units = if (merged == s.units) s.units else merged,
+                        units = units,
+                        atTarget = if (reached == s.atTarget) s.atTarget else reached,
                         loading = false,
                         pullRefreshing = false,
                         loadError = null,
@@ -466,6 +477,9 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
     }
 
     private var settleJob: Job? = null
+    private val atTarget = AtTargetTracker()
+    /** Laatste eigen wijziging per unit (ms), tot een refresh die daarna begon hem bevestigt. */
+    private val changedAt = mutableMapOf<String, Long>()
 
     /**
      * Eén refresh, 4 s na de láátste wijziging. Snel achter elkaar tikken of
@@ -481,7 +495,12 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
 
     private fun patchLocal(unitId: String, change: (AircoUnit) -> AircoUnit) {
         lastLocalChangeAt = System.currentTimeMillis()
-        _state.update { s -> s.copy(units = s.units.map { if (it.id == unitId) change(it) else it }) }
+        // Net zelf iets veranderd: niet "op temperatuur" tonen tot MELCloud het bevestigt.
+        changedAt[unitId] = lastLocalChangeAt
+        _state.update { s ->
+            val units = s.units.map { if (it.id == unitId) change(it) else it }
+            s.copy(units = units, atTarget = atTarget.update(units, suppressed = changedAt.keys))
+        }
     }
 
     private fun handleError(e: Exception) {
