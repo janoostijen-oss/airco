@@ -280,6 +280,16 @@ class AdaptiveScreenTest {
         assertEquals("pijltjes bij $label", if (arrows) 1 else 0, n)
     }
 
+    @Test @Config(qualifiers = "w411dp-h891dp")
+    fun tikkenOpBuitenEnVandaagVraagtOmVerseCijfers() {
+        show(extremesState())
+        rule.onNodeWithTag(TestTags.OUTDOOR).performClick()
+        rule.onNodeWithTag(TestTags.OUTDOOR).performClick()
+        rule.onNodeWithTag(TestTags.ENERGY_TODAY).performClick()
+        // Elke tik meldt zich; het ViewModel bundelt ze (0,8 s) en haalt hooguit één keer op.
+        assertEquals(3, actions.summaryTaps)
+    }
+
     private fun cycleBuiten() {
         tapBuitenEnCheck("BUITEN NU", null, "8,5°", arrows = true)
         rule.onNodeWithTag(TestTags.OUTDOOR).performClick(); rule.waitForIdle()
@@ -379,6 +389,8 @@ private class FakeActions : AircoActions {
     override fun setTemperature(unit: AircoUnit, value: Double) {}
     var yesterdayLoads = 0
     override fun loadEnergyYesterday() { yesterdayLoads++ }
+    var summaryTaps = 0
+    override fun onSummaryTap() { summaryTaps++ }
 }
 
 private fun sampleUnits(): List<AircoUnit> {

@@ -66,7 +66,31 @@ data class UiState(
     val loginUrl: String? = null,
 )
 
-private const val OUTDOOR_INTERVAL_MS = 10 * 60 * 1000L
+/**
+ * Versheid van de "bijzaken" (buitentemperatuur-rapport, verbruik): hoe oud
+ * mogen ze zijn voordat de app ze opnieuw vraagt? Elk ophalen kost één verzoek
+ * per buiten-/binnenunit, dus bewust zuinig (advies council):
+ *  - vanzelf (elke minuut-ronde): pas na 10 min;
+ *  - bij terugkomen in de app of tikken op Buiten/Vandaag: na 3 min;
+ *  - nooit vaker dan eens per minuut, ook niet bij zelf vernieuwen.
+ */
+internal object Freshness {
+    const val AUTO_MS = 10 * 60_000L
+    const val RESUME_OR_TAP_MS = 3 * 60_000L
+    const val MIN_INTERVAL_MS = 60_000L
+    const val TAP_DEBOUNCE_MS = 800L
+    /** Pauze tussen verzoeken per unit (achter elkaar, niet tegelijk). */
+    const val PER_UNIT_GAP_MS = 300L
+
+    /** Ophalen nodig? [fetchedAt] = laatste gelukte, [attemptAt] = laatste poging. */
+    fun due(now: Long, fetchedAt: Long, attemptAt: Long, maxAgeMs: Long): Boolean =
+        now - fetchedAt >= maxAgeMs && now - attemptAt >= MIN_INTERVAL_MS
+}
+
+/** Na zoveel minuten zonder bediening ververst de lijst rustiger. */
+private const val IDLE_AFTER_MS = 5 * 60_000L
+private const val POLL_MS = 60_000L
+private const val POLL_IDLE_MS = 180_000L
 private const val SETTLE_MS = 4000L
 
 /**
@@ -184,6 +208,7 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
     // ---------- Data ----------
 
     private var outdoorFetchedAt = 0L
+    private var outdoorAttemptAt = 0L
     private var outdoorJob: Job? = null
 
     /**
@@ -192,18 +217,21 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
      * (multi-split) en tellen dus één keer. Hooguit eens per 10 minuten,
      * tenzij je zelf vernieuwt: het rapport kost een verzoek per unit.
      */
-    private fun refreshOutdoor(force: Boolean) {
+    private fun refreshOutdoor(maxAgeMs: Long) {
         val units = _state.value.units
+        // Eén tegelijk: een tik tijdens het ophalen sluit gewoon aan bij dat ophalen.
         if (units.isEmpty() || outdoorJob?.isActive == true) return
-        if (!force && System.currentTimeMillis() - outdoorFetchedAt < OUTDOOR_INTERVAL_MS) return
+        val nowMs = System.currentTimeMillis()
+        if (!Freshness.due(nowMs, outdoorFetchedAt, outdoorAttemptAt, maxAgeMs)) return
+        outdoorAttemptAt = nowMs
         outdoorJob = viewModelScope.launch {
-            // Per buitenunit één rapport: binnenunits van dezelfde buitenunit meten
-            // dezelfde sensor. Lukt het bij de eerste niet, dan de volgende proberen.
-            val series = coroutineScope {
-                outdoorGroups(units).map { ids ->
-                    async { ids.firstNotNullOfOrNull { id -> outdoorSeriesOrNull(id)?.takeIf { it.isNotEmpty() } } }
-                }.awaitAll()
-            }.filterNotNull()
+            // Per buitenunit één rapport, achter elkaar: binnenunits van dezelfde buitenunit
+            // meten dezelfde sensor. Lukt het bij de eerste niet, dan de volgende proberen.
+            val series = mutableListOf<List<nl.jan.airco.data.Reading>>()
+            for ((i, ids) in outdoorGroups(units).withIndex()) {
+                if (i > 0) delay(Freshness.PER_UNIT_GAP_MS)
+                ids.firstNotNullOfOrNull { id -> outdoorSeriesOrNull(id)?.takeIf { it.isNotEmpty() } }?.let { series += it }
+            }
             if (series.isNotEmpty()) {
                 outdoorFetchedAt = System.currentTimeMillis()
                 val now = Instant.now()
@@ -228,6 +256,7 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
     }
 
     private var energyFetchedAt = 0L
+    private var energyAttemptAt = 0L
     private var energyDay: LocalDate? = null
     private var energyJob: Job? = null
 
@@ -237,14 +266,17 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
      * 10 minuten, tenzij je zelf vernieuwt of het een nieuwe dag is).
      * Units die zeker geen meter hebben worden niet gevraagd.
      */
-    private fun refreshEnergy(force: Boolean) {
+    private fun refreshEnergy(maxAgeMs: Long) {
         val units = _state.value.units.filter { it.capabilities.hasEnergyMeter != false }
         if (energyJob?.isActive == true) return
         val zone = ZoneId.systemDefault()
         val now = Instant.now()
         val today = now.atZone(zone).toLocalDate()
         val newDay = today != energyDay
-        if (!force && !newDay && System.currentTimeMillis() - energyFetchedAt < OUTDOOR_INTERVAL_MS) return
+        val nowMs = System.currentTimeMillis()
+        // Nieuwe dag: meteen (nog steeds hooguit eens per minuut), anders volgens de versheidsregel.
+        if (!Freshness.due(nowMs, if (newDay) 0L else energyFetchedAt, energyAttemptAt, maxAgeMs)) return
+        energyAttemptAt = nowMs
         if (units.isEmpty()) {
             _state.update { it.copy(energyTodayKwh = null) }
             return
@@ -271,20 +303,19 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
     private class EnergyTotal(val value: Double?)
 
     private suspend fun energyTotal(units: List<AircoUnit>, from: Instant, to: Instant): EnergyTotal? {
-        val results = coroutineScope {
-            units.map { u ->
-                async {
-                    val kwh = try {
-                        api.energyKwh(u.id, from, to)
-                    } catch (e: Exception) {
-                        if (e is kotlinx.coroutines.CancellationException) throw e
-                        return@async null // mislukt: deze ronde niet meetellen
-                    }
-                    u.capabilities.hasEnergyMeter to kwh
-                }
-            }.awaitAll()
+        // Achter elkaar met een korte pauze, niet alle units tegelijk op de API.
+        val results = mutableListOf<Pair<Boolean?, Double?>>()
+        for ((i, u) in units.withIndex()) {
+            if (i > 0) delay(Freshness.PER_UNIT_GAP_MS)
+            val kwh = try {
+                api.energyKwh(u.id, from, to)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                return null // mislukt (of even geen budget): deze ronde niet meetellen
+            }
+            results += u.capabilities.hasEnergyMeter to kwh
         }
-        return if (results.all { it != null }) EnergyTotal(combineEnergy(results.filterNotNull())) else null
+        return EnergyTotal(combineEnergy(results))
     }
 
     /** Dag waarvoor [UiState.energyYesterdayKwh] geldt als "gisteren" (= de dag van vandaag). */
@@ -329,15 +360,38 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
      * unit hem aan MELCloud heeft gemeld.
      */
     override fun onForeground() {
+        lastInteractionAt = System.currentTimeMillis()
         pollJob?.cancel()
         pollJob = viewModelScope.launch {
-            refresh()
+            // Terug in de app: bijzaken die ouder zijn dan 3 min meteen vernieuwen
+            // (anders zag je na lang openstaan nog de stand van eerder).
+            loadUnits(userInitiated = false, background = false, extrasMaxAgeMs = Freshness.RESUME_OR_TAP_MS)
             delay(15_000)
             pollRefresh()
             while (true) {
-                delay(60_000)
+                // Even niets bediend? Dan rustiger: elke 3 min i.p.v. elke minuut.
+                val idle = System.currentTimeMillis() - lastInteractionAt > IDLE_AFTER_MS
+                delay(if (idle) POLL_IDLE_MS else POLL_MS)
                 pollRefresh()
             }
+        }
+    }
+
+    private var lastInteractionAt = 0L
+    private var tapJob: Job? = null
+
+    /**
+     * Tik op Buiten of Vandaag: de weergave wisselt meteen (uit wat er al is);
+     * 0,8 s na de láátste tik kijkt de app of de cijfers ouder zijn dan 3 min en
+     * haalt ze dan één keer op. Snel achter elkaar tikken kost dus hooguit één ronde.
+     */
+    override fun onSummaryTap() {
+        lastInteractionAt = System.currentTimeMillis()
+        tapJob?.cancel()
+        tapJob = viewModelScope.launch {
+            delay(Freshness.TAP_DEBOUNCE_MS)
+            refreshOutdoor(Freshness.RESUME_OR_TAP_MS)
+            refreshEnergy(Freshness.RESUME_OR_TAP_MS)
         }
     }
 
@@ -355,6 +409,12 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
     }
 
     override fun refresh(userInitiated: Boolean, background: Boolean) {
+        if (userInitiated) lastInteractionAt = System.currentTimeMillis()
+        // Zelf vernieuwen: bijzaken ook, maar nog steeds hooguit eens per minuut.
+        loadUnits(userInitiated, background, extrasMaxAgeMs = if (userInitiated) 0L else Freshness.AUTO_MS)
+    }
+
+    private fun loadUnits(userInitiated: Boolean, background: Boolean, extrasMaxAgeMs: Long) {
         if (_state.value.screen != Screen.Units) return
         // Een achtergrondronde onderbreekt geen lopende (handmatige) refresh.
         if (background && refreshJob?.isActive == true) return
@@ -392,10 +452,11 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
                         loadError = null,
                     )
                 }
-                refreshOutdoor(force = userInitiated)
-                refreshEnergy(force = userInitiated)
+                refreshOutdoor(extrasMaxAgeMs)
+                refreshEnergy(extrasMaxAgeMs)
             } catch (e: Exception) {
-                if (e is RateLimitedException) onBackground() // tempo terug; weer aan bij heropenen
+                // Bij 429 blijft het verversen gewoon lopen: de poortwachter in de API houdt
+                // tijdens het afkoelen álle verzoeken tegen en laat daarna weer één door.
                 if (background && e !is NotLoggedInException && e !is kotlinx.coroutines.CancellationException) {
                     // Stil mislukken: geen snackbar elke minuut. Alleen zonder data een fout tonen.
                     _state.update {
@@ -502,6 +563,7 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
 
     private fun patchLocal(unitId: String, change: (AircoUnit) -> AircoUnit) {
         lastLocalChangeAt = System.currentTimeMillis()
+        lastInteractionAt = lastLocalChangeAt
         // Net zelf iets veranderd: niet "op temperatuur" tonen tot MELCloud het bevestigt.
         changedAt[unitId] = lastLocalChangeAt
         _state.update { s ->

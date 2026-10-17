@@ -22,4 +22,6 @@ interface AircoActions {
     fun setTemperature(unit: AircoUnit, value: Double)
     /** Verbruik van gisteren ophalen (eenmalig per dag), voor de tik op "Vandaag". */
     fun loadEnergyYesterday()
+    /** Tik op Buiten/Vandaag: na een korte pauze verse cijfers als ze verouderd zijn. */
+    fun onSummaryTap()
 }

@@ -25,7 +25,7 @@ internal object Http {
 }
 
 /** Statuscode + body van een afgerond verzoek. */
-internal data class HttpResult(val code: Int, val body: String)
+internal data class HttpResult(val code: Int, val body: String, val retryAfter: String? = null)
 
 /**
  * Voert het verzoek uit zonder een thread te blokkeren. Wordt de coroutine
@@ -41,7 +41,7 @@ internal suspend fun Call.await(): HttpResult = suspendCancellableCoroutine { co
 
         override fun onResponse(call: Call, response: Response) {
             val result = try {
-                response.use { HttpResult(it.code, it.body?.string().orEmpty()) }
+                response.use { HttpResult(it.code, it.body?.string().orEmpty(), it.header("Retry-After")) }
             } catch (e: IOException) {
                 cont.resumeWithException(e)
                 return

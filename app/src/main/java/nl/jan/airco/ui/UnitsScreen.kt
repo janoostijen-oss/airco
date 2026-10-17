@@ -11,6 +11,7 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -1035,7 +1036,7 @@ private fun SummaryCard(state: UiState, vm: AircoActions, size: SummarySize) {
             verticalAlignment = Alignment.Top,
             horizontalArrangement = Arrangement.spacedBy(size.gap.dp),
         ) {
-            OutdoorStat(state, size, Modifier.weight(size.outdoorWeight))
+            OutdoorStat(state, vm, size, Modifier.weight(size.outdoorWeight))
             StatDivider(size)
             EnergyStat(state, vm, size, Modifier.weight(1f))
             StatDivider(size)
@@ -1081,6 +1082,7 @@ private fun EnergyStat(state: UiState, vm: AircoActions, size: SummarySize, modi
                 view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                 if (!yesterday) vm.loadEnergyYesterday()
                 yesterday = !yesterday
+                vm.onSummaryTap()
             },
     ) {
         StatValue(text, if (kwh != null) " kWh" else null, size.value, size.kwhUnit)
@@ -1145,8 +1147,15 @@ private fun RowScope.StatDivider(size: SummarySize) {
 @Composable
 private fun StatValue(value: String, unit: String?, valueSp: Int, unitSp: Int) {
     Row(verticalAlignment = Alignment.Bottom) {
-        Text(
-            value,
+        // Nieuwe waarde (vers opgehaald of andere stand): zacht overvloeien, geen spinner.
+        androidx.compose.animation.AnimatedContent(
+            targetState = value,
+            transitionSpec = {
+                androidx.compose.animation.fadeIn(tween(200)) togetherWith androidx.compose.animation.fadeOut(tween(200))
+            },
+            label = "statValue",
+        ) { shown -> Text(
+            shown,
             fontFamily = Sora,
             fontWeight = FontWeight.Light,
             fontSize = valueSp.sp,
@@ -1154,7 +1163,7 @@ private fun StatValue(value: String, unit: String?, valueSp: Int, unitSp: Int) {
             color = Ink.Text,
             maxLines = 1,
             softWrap = false,
-        )
+        ) }
         if (unit != null) {
             Text(
                 unit,
@@ -1253,7 +1262,7 @@ private fun SummaryStat(
  * De trendpijltjes horen bij "nu" en staan alleen daar.
  */
 @Composable
-private fun OutdoorStat(state: UiState, size: SummarySize, modifier: Modifier) {
+private fun OutdoorStat(state: UiState, vm: AircoActions, size: SummarySize, modifier: Modifier) {
     var view by rememberSaveable { mutableIntStateOf(0) } // 0 = nu, 1 = max, 2 = min
     val haptic = LocalView.current
     val value = when (view) {
@@ -1281,6 +1290,7 @@ private fun OutdoorStat(state: UiState, size: SummarySize, modifier: Modifier) {
             ) {
                 haptic.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                 view = (view + 1) % 3
+                vm.onSummaryTap()
             }
             .semantics(mergeDescendants = true) { contentDescription = description },
     ) {

@@ -21,7 +21,11 @@ class NotLoggedInException(
     val loginFlowBroken: Boolean = false,
 ) : Exception(message)
 class HttpStatusException(val code: Int) : IOException("MELCloud gaf foutcode $code")
-class RateLimitedException : IOException("MELCloud vraagt even rustig aan te doen (te veel verzoeken). Probeer het later opnieuw.")
+class RateLimitedException(val until: Long = 0L) : IOException(
+    "MELCloud vraagt even rust (te veel verzoeken)" +
+        (if (until > 0) ". Weer beschikbaar rond " + java.text.SimpleDateFormat("HH:mm", java.util.Locale.ROOT).format(java.util.Date(until)) else "") +
+        ".",
+)
 
 /**
  * Minimale MELCloud Home client voor airco's (ATA), naar het voorbeeld van
@@ -35,6 +39,10 @@ class RateLimitedException : IOException("MELCloud vraagt even rustig aan te doe
  */
 class MelcloudApi(private val tokens: TokenStore, private val credentials: CredentialStore) {
     private val authLock = Mutex()
+    private val guard = RateGuard()
+
+    /** Tot wanneer (ms) MELCloud ons laat wachten na een 429; 0 = niet. */
+    val rateLimitedUntil: Long get() = guard.blockedUntil
     private val json = "application/json; charset=utf-8".toMediaType()
 
     val isLoggedIn: Boolean get() = tokens.load() != null || credentials.exists()
@@ -60,7 +68,7 @@ class MelcloudApi(private val tokens: TokenStore, private val credentials: Crede
 
     suspend fun units(): List<AircoUnit> {
         val body = try {
-            send { Request.Builder().url("$BASE_URL/context").get() }
+            send(essential = true) { Request.Builder().url("$BASE_URL/context").get() }
         } catch (e: HttpStatusException) {
             // 404 op /context = token is geldig, maar dit account heeft geen MELCloud Home-woning
             // (zie melcloud-api `#requestContext`). Vaak: ingelogd met een ander e-mailadres.
@@ -89,7 +97,7 @@ class MelcloudApi(private val tokens: TokenStore, private val credentials: Crede
             .addQueryParameter("to", fmt.format(now))
             .addQueryParameter("period", "Hourly")
             .build()
-        val body = send { Request.Builder().url(url).get() }
+        val body = send(essential = false) { Request.Builder().url(url).get() }
         return withContext(Dispatchers.Default) { ReportParser.outdoorSeries(body) }
     }
 
@@ -104,13 +112,13 @@ class MelcloudApi(private val tokens: TokenStore, private val credentials: Crede
             .addQueryParameter("interval", "Hour")
             .addQueryParameter("measure", "cumulative_energy_consumed_since_last_upload")
             .build()
-        val body = send { Request.Builder().url(url).get() }
+        val body = send(essential = false) { Request.Builder().url(url).get() }
         return withContext(Dispatchers.Default) { EnergyParser.totalKwh(body) }
     }
 
     suspend fun update(unitId: String, values: Map<String, Any>) {
         val payload = JSONObject(values).toString().toRequestBody(json)
-        send { Request.Builder().url("$BASE_URL/monitor/ataunit/$unitId").put(payload) }
+        send(essential = true) { Request.Builder().url("$BASE_URL/monitor/ataunit/$unitId").put(payload) }
     }
 
     /**
@@ -118,15 +126,18 @@ class MelcloudApi(private val tokens: TokenStore, private val credentials: Crede
      * Alles op IO: ook het token-beheer, want stil opnieuw inloggen ontsleutelt het
      * wachtwoord via de Keystore. Annuleren breekt het lopende verzoek echt af.
      */
-    private suspend fun send(build: () -> Request.Builder): String = withContext(Dispatchers.IO) {
+    private suspend fun send(essential: Boolean, build: () -> Request.Builder): String = withContext(Dispatchers.IO) {
         var token = validAccessToken(forceRefresh = false)
         repeat(2) { attempt ->
-            val (code, text) = Http.client.newCall(build().header("Authorization", "Bearer $token").build()).await()
+            guard.acquire(essential) // gooit tijdens afkoelen of als het budget op is
+            val result = Http.client.newCall(build().header("Authorization", "Bearer $token").build()).await()
+            val code = result.code
+            val text = result.body
             when {
-                code in 200..299 -> return@withContext text
+                code in 200..299 -> { guard.onSuccess(); return@withContext text }
                 code == 401 && attempt == 0 -> token = validAccessToken(forceRefresh = true)
                 code == 401 -> throw NotLoggedInException()
-                code == 429 -> throw RateLimitedException()
+                code == 429 -> throw RateLimitedException(guard.onRateLimited(result.retryAfter))
                 else -> throw HttpStatusException(code)
             }
         }
