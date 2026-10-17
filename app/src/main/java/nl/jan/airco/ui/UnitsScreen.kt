@@ -98,7 +98,9 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitHorizontalTouchSlopOrCancellation
 import androidx.compose.foundation.gestures.horizontalDrag
-import androidx.compose.foundation.systemGestureExclusion
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -601,6 +603,49 @@ private fun DialBlock(unit: AircoUnit, vm: AircoActions) {
     }
 }
 
+/**
+ * Zoals `Modifier.systemGestureExclusion()`, maar zonder per-frame werk tijdens scrollen:
+ * de positie wordt stil bijgehouden en pas aan Android doorgegeven als de pagina
+ * stilstaat (en weggehaald zolang hij scrolt). Één systeemaanroep per scroll i.p.v. elk frame.
+ */
+@Composable
+private fun rememberQuietGestureExclusion(scrolling: () -> Boolean): Modifier {
+    val view = LocalView.current
+    val holder = remember(view) { ExclusionHolder(view) }
+    val isScrolling = scrolling()
+    LaunchedEffect(isScrolling) { if (isScrolling) holder.clear() else holder.apply() }
+    DisposableEffect(holder) { onDispose { holder.clear() } }
+    val latestScrolling by rememberUpdatedState(scrolling)
+    return Modifier.onGloballyPositioned { coords ->
+        val b = coords.boundsInRoot()
+        holder.rect = if (b.isEmpty) null else android.graphics.Rect(b.left.toInt(), b.top.toInt(), b.right.toInt(), b.bottom.toInt())
+        if (!latestScrolling()) holder.apply() // bv. na een layoutwijziging, niet tijdens scrollen
+    }
+}
+
+private class ExclusionHolder(private val view: android.view.View) {
+    var rect: android.graphics.Rect? = null
+    private var applied: android.graphics.Rect? = null
+
+    fun apply() {
+        if (android.os.Build.VERSION.SDK_INT < 29) return
+        val r = rect
+        if (r == applied) return
+        val rects = view.systemGestureExclusionRects.toMutableList()
+        applied?.let { rects.remove(it) }
+        if (r != null) rects.add(r)
+        view.systemGestureExclusionRects = rects
+        applied = r
+    }
+
+    fun clear() {
+        if (android.os.Build.VERSION.SDK_INT < 29) return
+        val a = applied ?: return
+        view.systemGestureExclusionRects = view.systemGestureExclusionRects.filter { it != a }
+        applied = null
+    }
+}
+
 /** Meet de inhoud op ware grootte en tekent hem geschaald; neemt ook alleen de geschaalde ruimte in. */
 private fun Modifier.scaledBy(scale: Float): Modifier = if (scale >= 0.999f) this else layout { measurable, _ ->
     val placeable = measurable.measure(Constraints())
@@ -799,7 +844,7 @@ private fun FanSection(unit: AircoUnit, style: ModeStyle, enabled: Boolean, vm: 
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val latestUnit by rememberUpdatedState(unit)
     val latestBars by rememberUpdatedState(bars)
-    val scrolling = LocalPageScrolling.current()
+    val gestureExclusion = rememberQuietGestureExclusion(LocalPageScrolling.current)
 
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
         SectionTitle("Ventilator", Modifier.weight(1f))
@@ -867,7 +912,7 @@ private fun FanSection(unit: AircoUnit, style: ModeStyle, enabled: Boolean, vm: 
                 // Uitgezonderd van het terug-veeggebaar, maar niet tijdens scrollen: die
                 // uitzondering wordt bij elke verschuiving opnieuw aan Android doorgegeven
                 // (elk frame), en dat gaf de hapering onderaan de pagina. Stilstaand: één keer.
-                .then(if (scrolling) Modifier else Modifier.systemGestureExclusion())
+                .then(gestureExclusion)
                 .pointerInput(enabled, bars.size, rtl) {
                     if (!enabled || bars.size < 2) return@pointerInput
                     val count = bars.size
