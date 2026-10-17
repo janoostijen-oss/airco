@@ -70,21 +70,25 @@ data class UiState(
  * Versheid van de "bijzaken" (buitentemperatuur-rapport, verbruik): hoe oud
  * mogen ze zijn voordat de app ze opnieuw vraagt? Elk ophalen kost één verzoek
  * per buiten-/binnenunit, dus bewust zuinig (advies council):
+ *  - terugkomen in de app (uit de achtergrond): áltijd, zodra de lijst geladen is
+ *    (alleen niet als het minder dan 30 s geleden al gebeurde — snel wisselen);
+ *  - tikken op Buiten/Vandaag: na 3 min;
  *  - vanzelf (elke minuut-ronde): pas na 10 min;
- *  - bij terugkomen in de app of tikken op Buiten/Vandaag: na 3 min;
- *  - nooit vaker dan eens per minuut, ook niet bij zelf vernieuwen.
+ *  - verder nooit vaker dan eens per minuut, ook niet bij zelf vernieuwen.
  */
 internal object Freshness {
     const val AUTO_MS = 10 * 60_000L
     const val RESUME_OR_TAP_MS = 3 * 60_000L
     const val MIN_INTERVAL_MS = 60_000L
+    /** Bij terugkomen in de app: alleen overslaan als het net (< 30 s) gebeurd is. */
+    const val RESUME_MIN_INTERVAL_MS = 30_000L
     const val TAP_DEBOUNCE_MS = 800L
     /** Pauze tussen verzoeken per unit (achter elkaar, niet tegelijk). */
     const val PER_UNIT_GAP_MS = 300L
 
     /** Ophalen nodig? [fetchedAt] = laatste gelukte, [attemptAt] = laatste poging. */
-    fun due(now: Long, fetchedAt: Long, attemptAt: Long, maxAgeMs: Long): Boolean =
-        now - fetchedAt >= maxAgeMs && now - attemptAt >= MIN_INTERVAL_MS
+    fun due(now: Long, fetchedAt: Long, attemptAt: Long, maxAgeMs: Long, minIntervalMs: Long = MIN_INTERVAL_MS): Boolean =
+        now - fetchedAt >= maxAgeMs && now - attemptAt >= minIntervalMs
 }
 
 /** Na zoveel minuten zonder bediening ververst de lijst rustiger. */
@@ -217,12 +221,12 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
      * (multi-split) en tellen dus één keer. Hooguit eens per 10 minuten,
      * tenzij je zelf vernieuwt: het rapport kost een verzoek per unit.
      */
-    private fun refreshOutdoor(maxAgeMs: Long) {
+    private fun refreshOutdoor(maxAgeMs: Long, minIntervalMs: Long = Freshness.MIN_INTERVAL_MS) {
         val units = _state.value.units
         // Eén tegelijk: een tik tijdens het ophalen sluit gewoon aan bij dat ophalen.
         if (units.isEmpty() || outdoorJob?.isActive == true) return
         val nowMs = System.currentTimeMillis()
-        if (!Freshness.due(nowMs, outdoorFetchedAt, outdoorAttemptAt, maxAgeMs)) return
+        if (!Freshness.due(nowMs, outdoorFetchedAt, outdoorAttemptAt, maxAgeMs, minIntervalMs)) return
         outdoorAttemptAt = nowMs
         outdoorJob = viewModelScope.launch {
             // Per buitenunit één rapport, achter elkaar: binnenunits van dezelfde buitenunit
@@ -266,7 +270,7 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
      * 10 minuten, tenzij je zelf vernieuwt of het een nieuwe dag is).
      * Units die zeker geen meter hebben worden niet gevraagd.
      */
-    private fun refreshEnergy(maxAgeMs: Long) {
+    private fun refreshEnergy(maxAgeMs: Long, minIntervalMs: Long = Freshness.MIN_INTERVAL_MS) {
         val units = _state.value.units.filter { it.capabilities.hasEnergyMeter != false }
         if (energyJob?.isActive == true) return
         val zone = ZoneId.systemDefault()
@@ -275,7 +279,7 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
         val newDay = today != energyDay
         val nowMs = System.currentTimeMillis()
         // Nieuwe dag: meteen (nog steeds hooguit eens per minuut), anders volgens de versheidsregel.
-        if (!Freshness.due(nowMs, if (newDay) 0L else energyFetchedAt, energyAttemptAt, maxAgeMs)) return
+        if (!Freshness.due(nowMs, if (newDay) 0L else energyFetchedAt, energyAttemptAt, maxAgeMs, minIntervalMs)) return
         energyAttemptAt = nowMs
         if (units.isEmpty()) {
             _state.update { it.copy(energyTodayKwh = null) }
@@ -365,7 +369,11 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
         pollJob = viewModelScope.launch {
             // Terug in de app: bijzaken die ouder zijn dan 3 min meteen vernieuwen
             // (anders zag je na lang openstaan nog de stand van eerder).
-            loadUnits(userInitiated = false, background = false, extrasMaxAgeMs = Freshness.RESUME_OR_TAP_MS)
+            // Uit de achtergrond: Buiten en verbruik vandaag áltijd vernieuwen. Als vlag, zodat
+            // het ook gebeurt als dit eerste verzoek mislukt (netwerk komt net terug): dan
+            // doet de eerstvolgende gelukte ronde het alsnog.
+            extrasOnNextLoad = true
+            loadUnits(userInitiated = false, background = false, extrasMaxAgeMs = Freshness.AUTO_MS)
             delay(15_000)
             pollRefresh()
             while (true) {
@@ -379,6 +387,8 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
 
     private var lastInteractionAt = 0L
     private var tapJob: Job? = null
+    /** Gezet bij terugkomen in de app; de eerstvolgende gelukte lijst-ronde vernieuwt Buiten en verbruik. */
+    private var extrasOnNextLoad = false
 
     /**
      * Tik op Buiten of Vandaag: de weergave wisselt meteen (uit wat er al is);
@@ -452,8 +462,14 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
                         loadError = null,
                     )
                 }
-                refreshOutdoor(extrasMaxAgeMs)
-                refreshEnergy(extrasMaxAgeMs)
+                if (extrasOnNextLoad) {
+                    extrasOnNextLoad = false
+                    refreshOutdoor(maxAgeMs = 0L, minIntervalMs = Freshness.RESUME_MIN_INTERVAL_MS)
+                    refreshEnergy(maxAgeMs = 0L, minIntervalMs = Freshness.RESUME_MIN_INTERVAL_MS)
+                } else {
+                    refreshOutdoor(extrasMaxAgeMs)
+                    refreshEnergy(extrasMaxAgeMs)
+                }
             } catch (e: Exception) {
                 // Bij 429 blijft het verversen gewoon lopen: de poortwachter in de API houdt
                 // tijdens het afkoelen álle verzoeken tegen en laat daarna weer één door.

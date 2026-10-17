@@ -22,4 +22,12 @@ class FreshnessTest {
         assertFalse(Freshness.due(now = 100 * min + 30_000, fetchedAt = 0, attemptAt = 100 * min, maxAgeMs = 0))
         assertTrue(Freshness.due(now = 101 * min, fetchedAt = 0, attemptAt = 100 * min, maxAgeMs = 0))
     }
+
+    @Test fun terugkomenAltijdBehalveVlakNaVorigeKeer() {
+        val r = Freshness.RESUME_MIN_INTERVAL_MS
+        // Data 40 s oud: bij terugkomen tóch vernieuwen (maxAge 0, minimaal 30 s).
+        assertTrue(Freshness.due(now = 40_000, fetchedAt = 0, attemptAt = 0, maxAgeMs = 0, minIntervalMs = r))
+        // Net (10 s geleden) al gedaan, bv. snel heen en weer wisselen: overslaan.
+        assertFalse(Freshness.due(now = 10_000, fetchedAt = 0, attemptAt = 0, maxAgeMs = 0, minIntervalMs = r))
+    }
 }
