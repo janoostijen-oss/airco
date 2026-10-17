@@ -13,6 +13,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import nl.jan.airco.AircoActions
 import nl.jan.airco.Screen
@@ -288,6 +289,46 @@ class AdaptiveScreenTest {
         rule.onNodeWithTag(TestTags.ENERGY_TODAY).performClick()
         // Elke tik meldt zich; het ViewModel bundelt ze (0,8 s) en haalt hooguit één keer op.
         assertEquals(3, actions.summaryTaps)
+    }
+
+    // --------------------------------------------------------------- vloeiend scrollen
+
+    /**
+     * De ventilatorstrook is uitgezonderd van het terug-veeggebaar. Die uitzondering
+     * mag tijdens scrollen niet elk frame naar Android (dat gaf de hapering onderaan):
+     * weg tijdens scrollen, één keer terug als de pagina stilstaat.
+     */
+    @Test @Config(qualifiers = "w411dp-h600dp")
+    fun gebaaruitzonderingNietTijdensScrollen() {
+        var view: android.view.View? = null
+        rule.setContent {
+            view = androidx.compose.ui.platform.LocalView.current
+            MaterialTheme(colorScheme = darkColorScheme()) {
+                UnitsScreen(state = UiState(screen = Screen.Units, units = sampleUnits()), vm = actions)
+            }
+        }
+        rule.onNode(hasText("Kantoor") and hasAnyAncestor(hasTestTag(TestTags.OVERVIEW))).performClick()
+        rule.waitForIdle()
+        rule.mainClock.advanceTimeBy(1_000)
+        rule.waitForIdle()
+        assertTrue("stilstaand: strook uitgezonderd", view!!.systemGestureExclusionRects.isNotEmpty())
+
+        rule.mainClock.autoAdvance = false
+        rule.onNodeWithTag(TestTags.DETAIL_PANE).performTouchInput {
+            down(center)
+            moveBy(androidx.compose.ui.geometry.Offset(0f, -40f))
+            moveBy(androidx.compose.ui.geometry.Offset(0f, -40f))
+            moveBy(androidx.compose.ui.geometry.Offset(0f, -40f))
+        }
+        rule.mainClock.advanceTimeByFrame()
+        rule.mainClock.advanceTimeByFrame()
+        assertTrue("tijdens scrollen geen uitzondering", view!!.systemGestureExclusionRects.isEmpty())
+
+        rule.onNodeWithTag(TestTags.DETAIL_PANE).performTouchInput { up() }
+        rule.mainClock.autoAdvance = true
+        rule.mainClock.advanceTimeBy(3_000)
+        rule.waitForIdle()
+        assertTrue("na het scrollen weer uitgezonderd", view!!.systemGestureExclusionRects.isNotEmpty())
     }
 
     private fun cycleBuiten() {

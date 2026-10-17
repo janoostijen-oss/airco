@@ -119,6 +119,12 @@ import nl.jan.airco.data.Mode
  */
 internal val LocalAtTarget = compositionLocalOf { emptySet<String>() }
 
+/**
+ * Of de pagina waarop de bediening staat nu scrolt (of uitloopt). Leest de
+ * ScrollState pas waar het nodig is; zie [FanSection].
+ */
+private val LocalPageScrolling = compositionLocalOf<() -> Boolean> { { false } }
+
 @Composable
 private fun isAtTarget(unit: AircoUnit): Boolean = unit.id in LocalAtTarget.current
 
@@ -263,7 +269,9 @@ private fun UnitsScreenContent(state: UiState, vm: AircoActions) {
                             RoomSwitcher(state.units, detailUnit.id) { detailId = it }
                         }
                         Spacer(Modifier.height(22.dp))
-                        UnitControls(detailUnit, vm)
+                        CompositionLocalProvider(LocalPageScrolling provides { detailScroll.isScrollInProgress }) {
+                            UnitControls(detailUnit, vm)
+                        }
                     }
                 }
             }
@@ -791,6 +799,7 @@ private fun FanSection(unit: AircoUnit, style: ModeStyle, enabled: Boolean, vm: 
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val latestUnit by rememberUpdatedState(unit)
     val latestBars by rememberUpdatedState(bars)
+    val scrolling = LocalPageScrolling.current()
 
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
         SectionTitle("Ventilator", Modifier.weight(1f))
@@ -855,7 +864,10 @@ private fun FanSection(unit: AircoUnit, style: ModeStyle, enabled: Boolean, vm: 
             Modifier
                 .weight(1f)
                 .fillMaxHeight()
-                .systemGestureExclusion()
+                // Uitgezonderd van het terug-veeggebaar, maar niet tijdens scrollen: die
+                // uitzondering wordt bij elke verschuiving opnieuw aan Android doorgegeven
+                // (elk frame), en dat gaf de hapering onderaan de pagina. Stilstaand: één keer.
+                .then(if (scrolling) Modifier else Modifier.systemGestureExclusion())
                 .pointerInput(enabled, bars.size, rtl) {
                     if (!enabled || bars.size < 2) return@pointerInput
                     val count = bars.size
@@ -1548,13 +1560,15 @@ private fun TwoPane(
 /** Foldable: bediening onder elkaar, zoals op de telefoon, met "meer" naast aan/uit. */
 @Composable
 private fun FoldableDetail(unit: AircoUnit, vm: AircoActions, modifier: Modifier) {
+    val scroll = rememberScrollState()
     Column(
         modifier
             .fillMaxHeight()
             .testTag(TestTags.DETAIL_PANE)
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(scroll)
             .padding(start = 24.dp, end = 24.dp, top = 22.dp, bottom = 20.dp),
     ) {
+        CompositionLocalProvider(LocalPageScrolling provides { scroll.isScrollInProgress }) {
         DetailHeader(unit, vm, nameSize = 26.sp, trailing = {
             Spacer(Modifier.width(8.dp))
             MoreMenuButton(vm)
@@ -1565,6 +1579,7 @@ private fun FoldableDetail(unit: AircoUnit, vm: AircoActions, modifier: Modifier
         ModeSection(unit, unit.isConnected, vm)
         Spacer(Modifier.height(18.dp))
         FanSection(unit, unit.mode.style(), unit.isConnected, vm)
+        }
     }
 }
 
@@ -1585,10 +1600,11 @@ private fun TabletDetail(unit: AircoUnit, vm: AircoActions, modifier: Modifier) 
         // De rest vult de hoogte en centreert; past het niet (laag venster), dan scrollt het.
         BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
             val viewport = maxHeight
+            val scroll = rememberScrollState()
             Column(
                 Modifier
                     .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
+                    .verticalScroll(scroll)
                     .heightIn(min = viewport)
                     .padding(top = 16.dp, bottom = 28.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -1599,7 +1615,9 @@ private fun TabletDetail(unit: AircoUnit, vm: AircoActions, modifier: Modifier) 
                 Column(Modifier.widthIn(max = 560.dp).fillMaxWidth().padding(top = 4.dp)) {
                     ModeSection(unit, unit.isConnected, vm)
                     Spacer(Modifier.height(18.dp))
-                    FanSection(unit, unit.mode.style(), unit.isConnected, vm)
+                    CompositionLocalProvider(LocalPageScrolling provides { scroll.isScrollInProgress }) {
+                        FanSection(unit, unit.mode.style(), unit.isConnected, vm)
+                    }
                 }
             }
         }
