@@ -9,10 +9,15 @@ import kotlin.random.Random
  *  - **Afkoelen na 429:** alle verzoeken (ook /context) wachten tot de server het
  *    weer goed vindt: `Retry-After` als die er is, anders 2 → 4 → 8 → 15 min (±20%).
  *    Eén geslaagd verzoek zet de opbouw terug.
- *  - **Budget:** hooguit [budget] verzoeken per [windowMs]. Bijzaken (rapporten,
- *    verbruik) stoppen al eerder, zodat er altijd ruimte blijft voor de lijst
- *    zelf en voor wat jij bedient.
+ *  - **Budget:** wat de app zelf doet, hooguit [budget] verzoeken per [windowMs].
+ *    Bijzaken (rapporten, verbruik) stoppen al eerder, zodat er ruimte blijft voor
+ *    de lijst zelf.
+ *  - **Bediening** (aan/uit, modus, ventilator, temperatuur) valt niet onder het
+ *    budget: die komt altijd van jou en de temperatuur is al gebundeld. Alleen
+ *    tijdens afkoelen na een 429 wacht ook bediening (MELCloud weigert dan toch).
  */
+enum class RequestKind { Command, List, Extra }
+
 class RateGuard(
     private val clock: () -> Long = System::currentTimeMillis,
     private val random: Random = Random.Default,
@@ -29,12 +34,17 @@ class RateGuard(
 
     /** Gooit als dit verzoek nu niet mag; registreert het anders als verstuurd. */
     @Synchronized
-    fun acquire(essential: Boolean) {
+    fun acquire(kind: RequestKind) {
         val now = clock()
         if (now < cooldownUntil) throw RateLimitedException(cooldownUntil)
         while (recent.isNotEmpty() && now - recent.first() >= windowMs) recent.removeFirst()
-        val limit = if (essential) budget else extrasBudget
+        val limit = when (kind) {
+            RequestKind.Command -> Int.MAX_VALUE // nooit afgeremd door het budget
+            RequestKind.List -> budget
+            RequestKind.Extra -> extrasBudget
+        }
         if (recent.size >= limit) throw BudgetExceededException()
+        // Ook bediening telt mee, zodat bijzaken rustiger aan doen als jij druk bezig bent.
         recent.addLast(now)
     }
 

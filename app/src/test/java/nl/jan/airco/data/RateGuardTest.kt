@@ -23,9 +23,9 @@ class RateGuardTest {
         val until = g.onRateLimited("120")
         assertEquals(now + 120_000, until)
         now += 119_000
-        assertThrows<RateLimitedException> { g.acquire(essential = true) } // ook /context wacht
+        assertThrows<RateLimitedException> { g.acquire(RequestKind.List) } // ook /context wacht
         now += 1_000
-        g.acquire(essential = true)
+        g.acquire(RequestKind.List)
     }
 
     @Test
@@ -39,7 +39,7 @@ class RateGuardTest {
     fun succesZetOpbouwTerug() {
         val g = guard()
         now = g.onRateLimited(null); now = g.onRateLimited(null) // 2, 4 min
-        g.acquire(true); g.onSuccess()
+        g.acquire(RequestKind.List); g.onSuccess()
         val start = now
         assertEquals(2 * 60_000L, g.onRateLimited(null) - start)
     }
@@ -47,13 +47,37 @@ class RateGuardTest {
     @Test
     fun bijzakenStoppenEerderDanDeLijst() {
         val g = guard(budget = 5, extras = 3)
-        repeat(3) { g.acquire(essential = false) }
-        assertThrows<BudgetExceededException> { g.acquire(essential = false) }
-        g.acquire(essential = true) // de lijst en jouw bediening mogen nog
-        g.acquire(essential = true)
-        assertThrows<BudgetExceededException> { g.acquire(essential = true) }
+        repeat(3) { g.acquire(RequestKind.Extra) }
+        assertThrows<BudgetExceededException> { g.acquire(RequestKind.Extra) }
+        g.acquire(RequestKind.List) // de lijst en jouw bediening mogen nog
+        g.acquire(RequestKind.List)
+        assertThrows<BudgetExceededException> { g.acquire(RequestKind.List) }
         now += 5 * 60_000 // venster voorbij
-        g.acquire(essential = false)
+        g.acquire(RequestKind.Extra)
+    }
+
+    @Test
+    fun bedieningNooitAfgeremdDoorBudget() {
+        val g = guard(budget = 5, extras = 3)
+        repeat(5) { g.acquire(RequestKind.List) }
+        assertThrows<BudgetExceededException> { g.acquire(RequestKind.List) }
+        repeat(20) { g.acquire(RequestKind.Command) } // aan/uit, modus, temperatuur: gaan altijd door
+    }
+
+    @Test
+    fun bedieningTeltWelMeeVoorBijzaken() {
+        val g = guard(budget = 5, extras = 3)
+        repeat(3) { g.acquire(RequestKind.Command) }
+        assertThrows<BudgetExceededException> { g.acquire(RequestKind.Extra) }
+    }
+
+    @Test
+    fun bedieningWachtTijdensAfkoelenNa429() {
+        val g = guard()
+        g.onRateLimited("60")
+        assertThrows<RateLimitedException> { g.acquire(RequestKind.Command) }
+        now += 60_000
+        g.acquire(RequestKind.Command)
     }
 
     @Test

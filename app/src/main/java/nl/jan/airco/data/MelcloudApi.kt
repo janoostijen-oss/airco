@@ -68,7 +68,7 @@ class MelcloudApi(private val tokens: TokenStore, private val credentials: Crede
 
     suspend fun units(): List<AircoUnit> {
         val body = try {
-            send(essential = true) { Request.Builder().url("$BASE_URL/context").get() }
+            send(RequestKind.List) { Request.Builder().url("$BASE_URL/context").get() }
         } catch (e: HttpStatusException) {
             // 404 op /context = token is geldig, maar dit account heeft geen MELCloud Home-woning
             // (zie melcloud-api `#requestContext`). Vaak: ingelogd met een ander e-mailadres.
@@ -97,7 +97,7 @@ class MelcloudApi(private val tokens: TokenStore, private val credentials: Crede
             .addQueryParameter("to", fmt.format(now))
             .addQueryParameter("period", "Hourly")
             .build()
-        val body = send(essential = false) { Request.Builder().url(url).get() }
+        val body = send(RequestKind.Extra) { Request.Builder().url(url).get() }
         return withContext(Dispatchers.Default) { ReportParser.outdoorSeries(body) }
     }
 
@@ -112,13 +112,13 @@ class MelcloudApi(private val tokens: TokenStore, private val credentials: Crede
             .addQueryParameter("interval", "Hour")
             .addQueryParameter("measure", "cumulative_energy_consumed_since_last_upload")
             .build()
-        val body = send(essential = false) { Request.Builder().url(url).get() }
+        val body = send(RequestKind.Extra) { Request.Builder().url(url).get() }
         return withContext(Dispatchers.Default) { EnergyParser.totalKwh(body) }
     }
 
     suspend fun update(unitId: String, values: Map<String, Any>) {
         val payload = JSONObject(values).toString().toRequestBody(json)
-        send(essential = true) { Request.Builder().url("$BASE_URL/monitor/ataunit/$unitId").put(payload) }
+        send(RequestKind.Command) { Request.Builder().url("$BASE_URL/monitor/ataunit/$unitId").put(payload) }
     }
 
     /**
@@ -126,10 +126,10 @@ class MelcloudApi(private val tokens: TokenStore, private val credentials: Crede
      * Alles op IO: ook het token-beheer, want stil opnieuw inloggen ontsleutelt het
      * wachtwoord via de Keystore. Annuleren breekt het lopende verzoek echt af.
      */
-    private suspend fun send(essential: Boolean, build: () -> Request.Builder): String = withContext(Dispatchers.IO) {
+    private suspend fun send(kind: RequestKind, build: () -> Request.Builder): String = withContext(Dispatchers.IO) {
         var token = validAccessToken(forceRefresh = false)
         repeat(2) { attempt ->
-            guard.acquire(essential) // gooit tijdens afkoelen of als het budget op is
+            guard.acquire(kind) // gooit tijdens afkoelen of als het budget op is
             val result = Http.client.newCall(build().header("Authorization", "Bearer $token").build()).await()
             val code = result.code
             val text = result.body

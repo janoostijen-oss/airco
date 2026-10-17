@@ -12,8 +12,8 @@ android {
         applicationId = "nl.jan.airco"
         minSdk = 26
         targetSdk = 35
-        versionCode = 26
-        versionName = "3.8"
+        versionCode = 27
+        versionName = "3.9"
     }
 
     // Vaste debug-sleutel in de repo, zodat elke nieuwe build als update
