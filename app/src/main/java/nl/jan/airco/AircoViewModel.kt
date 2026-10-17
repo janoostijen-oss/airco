@@ -24,6 +24,7 @@ import nl.jan.airco.data.Mode
 import nl.jan.airco.data.NotLoggedInException
 import nl.jan.airco.data.RateLimitedException
 import nl.jan.airco.data.TokenStore
+import nl.jan.airco.data.EnergyCache
 import nl.jan.airco.data.outdoorTrend
 import nl.jan.airco.data.outdoorExtremes
 import nl.jan.airco.data.AtTargetTracker
@@ -206,6 +207,8 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
 
     override fun logout() {
         api.logout()
+        energyCache.clear() // niet bij een ander account laten zien
+        yesterdayValidUntil = null
         _state.value = UiState(screen = Screen.Login)
     }
 
@@ -296,8 +299,8 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
                 _state.update { it.copy(energyTodayKwh = null) } // gisteren niet als vandaag tonen
             }
             // Nieuwe dag: het bewaarde "gisteren" hoort nu bij eergisteren.
-            if (newDay && yesterdayDay != null && yesterdayDay != today) {
-                yesterdayDay = null
+            if (newDay && yesterdayValidUntil != null && Instant.now() >= yesterdayValidUntil) {
+                yesterdayValidUntil = null
                 _state.update { it.copy(energyYesterdayKwh = null) }
             }
         }
@@ -323,8 +326,9 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
     }
 
     /** Dag waarvoor [UiState.energyYesterdayKwh] geldt als "gisteren" (= de dag van vandaag). */
-    private var yesterdayDay: LocalDate? = null
+    private var yesterdayValidUntil: Instant? = null
     private var yesterdayJob: Job? = null
+    private val energyCache = EnergyCache(app)
 
     /**
      * Gisteren is een afgesloten dag: één keer per dag ophalen en bewaren.
@@ -333,15 +337,27 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
     override fun loadEnergyYesterday() {
         val zone = ZoneId.systemDefault()
         val now = Instant.now()
-        val today = now.atZone(zone).toLocalDate()
-        if (yesterdayDay == today) return // al opgehaald vandaag
+        val yesterday = now.atZone(zone).toLocalDate().minusDays(1)
+        yesterdayValidUntil?.let { if (now < it) return } // al opgehaald en nog geldig
         if (yesterdayJob?.isActive == true) return
+        // Op het toestel bewaard (ook na herstart): geen verzoek nodig.
+        energyCache.load(yesterday)?.let { cached ->
+            yesterdayValidUntil = yesterday.plusDays(2).atStartOfDay(zone).toInstant()
+            _state.update { it.copy(energyYesterdayKwh = cached, energyYesterdayLoading = false) }
+            return
+        }
         val units = _state.value.units.filter { it.capabilities.hasEnergyMeter != false }
         if (units.isEmpty()) return
         yesterdayJob = viewModelScope.launch {
             _state.update { it.copy(energyYesterdayLoading = true) }
             val total = energyTotal(units, startOfYesterday(now, zone), startOfToday(now, zone))
-            if (total != null) yesterdayDay = today
+            if (total != null) {
+                val fetchedAt = now.atZone(zone)
+                yesterdayValidUntil = EnergyCache.validUntil(fetchedAt, zone).toInstant()
+                // Pas na 01:00 en alleen een geldige waarde > 0 vastleggen: daarvoor kan
+                // MELCloud nog verbruik van gisteren nasturen.
+                if (EnergyCache.shouldPersist(total.value, fetchedAt)) energyCache.save(yesterday, total.value!!)
+            }
             _state.update {
                 it.copy(
                     energyYesterdayLoading = false,
