@@ -809,7 +809,9 @@ private fun RowScope.ModeButton(mode: Mode, active: Boolean, enabled: Boolean, o
             .clip(shape)
             .background(
                 if (active) {
-                    Brush.linearGradient(listOf(s.c2.copy(alpha = 0.20f), s.c2.copy(alpha = 0.07f)))
+                    // Ondoorzichtig (zelfde kleur als doorzichtig op de grond): anders schijnt de
+                    // donkere kern van de gloed-schaduw erdoorheen als vlakje achter het label.
+                    Brush.linearGradient(listOf(s.c2.copy(alpha = 0.20f).onGround(), s.c2.copy(alpha = 0.07f).onGround()))
                 } else {
                     Brush.linearGradient(listOf(Ink.white(0.035f), Ink.white(0.035f)))
                 },
@@ -1377,7 +1379,7 @@ private fun RoomOverviewCard(unit: AircoUnit, vm: AircoActions, onOpen: () -> Un
             .then(if (on) Modifier.shadow(20.dp, shape, ambientColor = style.c2, spotColor = Color.Black) else Modifier)
             .clip(shape)
             .background(
-                if (on) Brush.linearGradient(listOf(Ink.white(0.075f), Ink.white(0.025f)))
+                if (on) Brush.linearGradient(listOf(Ink.white(0.075f).onGround(), Ink.white(0.025f).onGround())) // ondoorzichtig onder de schaduw
                 else Brush.linearGradient(listOf(Ink.white(0.03f), Ink.white(0.03f))),
             )
             .drawBehind {
@@ -1728,7 +1730,7 @@ private fun RoomListRow(unit: AircoUnit, selected: Boolean, wide: Boolean, vm: A
             .clip(shape)
             .background(
                 when {
-                    selected && wide -> Brush.linearGradient(listOf(Ink.white(0.085f), Ink.white(0.03f)))
+                    selected && wide -> Brush.linearGradient(listOf(Ink.white(0.085f).onGround(), Ink.white(0.03f).onGround())) // ondoorzichtig onder de schaduw
                     selected -> Brush.linearGradient(listOf(Ink.white(0.08f), Ink.white(0.08f)))
                     else -> Brush.linearGradient(listOf(Ink.white(0.025f), Ink.white(0.025f)))
                 },

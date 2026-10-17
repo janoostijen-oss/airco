@@ -5,6 +5,7 @@ import android.view.HapticFeedbackConstants
 import android.view.View
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -36,6 +37,12 @@ object Ink {
 
     fun white(alpha: Float) = Color.White.copy(alpha = alpha)
 }
+
+/**
+ * Doorzichtige kleur → dezelfde kleur, ondoorzichtig op de app-achtergrond. Voor vlakken
+ * met een schaduw: door een doorzichtig vlak schijnt de donkere schaduwkern heen.
+ */
+fun Color.onGround(): Color = compositeOver(Ink.Ground)
 
 val Sora = FontFamily(
     Font(R.font.sora_200, FontWeight.ExtraLight),
