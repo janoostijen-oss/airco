@@ -310,15 +310,18 @@ class AdaptiveScreenTest {
         rule.onNode(hasText("Kantoor") and hasAnyAncestor(hasTestTag(TestTags.OVERVIEW))).performClick()
         rule.waitForIdle()
         rule.mainClock.advanceTimeBy(1_000)
+        // Naar beneden, zodat de ventilatorstrook in beeld is; daarna laten uitlopen.
+        rule.onNodeWithTag(TestTags.DETAIL_PANE).performTouchInput { swipeUp() }
+        rule.mainClock.advanceTimeBy(3_000)
         rule.waitForIdle()
         assertTrue("stilstaand: strook uitgezonderd", view!!.systemGestureExclusionRects.isNotEmpty())
 
         rule.mainClock.autoAdvance = false
         rule.onNodeWithTag(TestTags.DETAIL_PANE).performTouchInput {
             down(center)
-            moveBy(androidx.compose.ui.geometry.Offset(0f, -40f))
-            moveBy(androidx.compose.ui.geometry.Offset(0f, -40f))
-            moveBy(androidx.compose.ui.geometry.Offset(0f, -40f))
+            moveBy(androidx.compose.ui.geometry.Offset(0f, 40f))
+            moveBy(androidx.compose.ui.geometry.Offset(0f, 40f))
+            moveBy(androidx.compose.ui.geometry.Offset(0f, 40f))
         }
         rule.mainClock.advanceTimeByFrame()
         rule.mainClock.advanceTimeByFrame()
