@@ -330,6 +330,8 @@ class AdaptiveScreenTest {
 
         rule.onNodeWithTag(TestTags.DETAIL_PANE).performTouchInput { up() }
         rule.mainClock.autoAdvance = true
+        // Weer naar beneden (strook in beeld) en laten uitlopen: uitzondering is terug.
+        rule.onNodeWithTag(TestTags.DETAIL_PANE).performTouchInput { swipeUp() }
         rule.mainClock.advanceTimeBy(3_000)
         rule.waitForIdle()
         assertTrue("na het scrollen weer uitgezonderd", view!!.systemGestureExclusionRects.isNotEmpty())
