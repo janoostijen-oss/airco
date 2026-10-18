@@ -796,13 +796,15 @@ private fun HotConfirmSheet(confirm: nl.jan.airco.HotConfirm?, vm: AircoActions)
                         Modifier
                             .weight(1f)
                             .height(54.dp)
-                            .shadow(14.dp, btn, ambientColor = warm.c2, spotColor = warm.c2)
-                            .clip(btn)
-                            .background(Brush.linearGradient(listOf(warm.c1, warm.c2)))
+                            // Eerst het tikgebied, dan pas schaduw/afronding: zo ligt de knop
+                            // altijd bovenop (en telt een tik nooit als "ernaast").
                             .clickable(role = Role.Button) {
                                 view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                                 vm.confirmHot()
-                            },
+                            }
+                            .shadow(14.dp, btn, clip = false, ambientColor = warm.c2, spotColor = warm.c2)
+                            .clip(btn)
+                            .background(Brush.linearGradient(listOf(warm.c1, warm.c2))),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text("Ja", fontFamily = Manrope, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color.White)
