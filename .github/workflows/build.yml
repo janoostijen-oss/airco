@@ -75,13 +75,8 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          for f in test.log build.log; do
-            [ -f "$f" ] || continue
-            grep -E "^e: |What went wrong| FAILED$|AssertionError|Exception:" -A2 "$f" | head -60 | while IFS= read -r line; do
-              [ -n "$line" ] && echo "::error::${line}"
-            done
-          done
-          # Per mislukte test de melding uit het JUnit-rapport.
+          # Eerst per mislukte test de melding uit het JUnit-rapport (GitHub toont maar
+          # ~10 foutregels per stap, dus de nuttigste eerst).
           for x in app/build/test-results/testDebugUnitTest/*.xml; do
             [ -f "$x" ] || continue
             python3 - "$x" <<'PY'
@@ -89,8 +84,14 @@ jobs:
           for tc in ET.parse(sys.argv[1]).getroot().iter("testcase"):
               for f in list(tc.findall("failure")) + list(tc.findall("error")):
                   msg = (f.get("message") or f.text or "").strip().splitlines()
-                  print(f"::error::TEST {tc.get('classname')}.{tc.get('name')}: {' | '.join(msg[:3])[:900]}")
+                  print(f"::error::TEST {tc.get('name')}: {' | '.join(msg[:3])[:900]}")
           PY
+          done
+          for f in test.log build.log; do
+            [ -f "$f" ] || continue
+            grep -E "^e: |What went wrong" -A2 "$f" | head -20 | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error::${line}"
+            done
           done
 
       - uses: actions/upload-artifact@v4
