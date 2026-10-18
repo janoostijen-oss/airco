@@ -81,6 +81,8 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -284,6 +286,8 @@ private fun UnitsScreenContent(state: UiState, vm: AircoActions) {
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).safeDrawingPadding().padding(16.dp)) {
             Snackbar(it, containerColor = Color(0xFF1C2029), contentColor = Ink.Text)
         }
+
+        HotConfirmSheet(state.hotConfirm, vm)
     }
 }
 
@@ -645,6 +649,167 @@ private class ExclusionHolder(private val view: android.view.View) {
         val a = applied ?: return
         view.systemGestureExclusionRects = view.systemGestureExclusionRects.filter { it != a }
         applied = null
+    }
+}
+
+/**
+ * "Weet je zeker dat je de temperatuur hoger dan 25° wilt instellen?" — paneel dat van
+ * onderen inschuift over een gedimde achtergrond. Ja verstuurt, Nee (of tik ernaast,
+ * of terug-gebaar) zet de knop terug. Tot dan is er niets naar de airco gegaan.
+ */
+@Composable
+private fun HotConfirmSheet(confirm: nl.jan.airco.HotConfirm?, vm: AircoActions) {
+    // De laatste vraag vasthouden, zodat het paneel netjes kan wegschuiven.
+    var shown by remember { mutableStateOf(confirm) }
+    if (confirm != null) shown = confirm
+    val visible = confirm != null
+    val view = LocalView.current
+    androidx.activity.compose.BackHandler(enabled = visible) { vm.cancelHot() }
+
+    androidx.compose.animation.AnimatedVisibility(
+        visible = visible,
+        enter = androidx.compose.animation.fadeIn(tween(220)),
+        exit = androidx.compose.animation.fadeOut(tween(200)),
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color(0xFF050609).copy(alpha = 0.62f))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClickLabel = "Annuleren",
+                ) { vm.cancelHot() },
+        )
+    }
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+        androidx.compose.animation.AnimatedVisibility(
+            visible = visible,
+            enter = androidx.compose.animation.slideInVertically(tween(320, easing = CubicBezierEasing(0.2f, 0.8f, 0.2f, 1f))) { it },
+            exit = androidx.compose.animation.slideOutVertically(tween(240)) { it },
+        ) {
+            val q = shown ?: return@AnimatedVisibility
+            val sheetShape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp)
+            val warm = Mode.Heat.style()
+            Column(
+                Modifier
+                    .widthIn(max = 560.dp)
+                    .fillMaxWidth()
+                    .testTag(TestTags.HOT_CONFIRM)
+                    .shadow(30.dp, sheetShape)
+                    .clip(sheetShape)
+                    .background(Brush.verticalGradient(listOf(Color(0xFF1A1E28), Color(0xFF12151C))))
+                    .border(1.dp, Ink.white(0.09f), sheetShape)
+                    // Tikken op het paneel zelf mag niet als "ernaast" tellen.
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
+                    .semantics { paneTitle = "Hoger dan 25 graden?" }
+                    .navigationBarsPadding()
+                    .padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 24.dp),
+            ) {
+                Box(
+                    Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .size(width = 40.dp, height = 4.dp)
+                        .background(Ink.white(0.16f), RoundedCornerShape(2.dp)),
+                )
+                Spacer(Modifier.height(18.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    val tile = RoundedCornerShape(18.dp)
+                    Box(
+                        Modifier
+                            .size(52.dp)
+                            .clip(tile)
+                            .background(Brush.linearGradient(listOf(warm.c1.copy(alpha = 0.2f), warm.c2.copy(alpha = 0.13f))))
+                            .border(1.dp, warm.c2.copy(alpha = 0.33f), tile),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Thermo, contentDescription = null, tint = warm.c1, modifier = Modifier.size(26.dp))
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text(
+                            q.unitName.uppercase(),
+                            fontFamily = Manrope,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            letterSpacing = 1.5.sp,
+                            color = Ink.Muted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                "${fmtTemp(q.from)}°",
+                                fontFamily = Sora,
+                                fontWeight = FontWeight.Light,
+                                fontSize = 15.sp,
+                                color = Ink.Dim,
+                                style = androidx.compose.ui.text.TextStyle(textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough),
+                            )
+                            Icon(Icons.Arrow, contentDescription = "naar", tint = Ink.Dim, modifier = Modifier.size(14.dp))
+                            Text(
+                                "${fmtTemp(q.to)}°",
+                                fontFamily = Sora,
+                                fontWeight = FontWeight.Light,
+                                fontSize = 26.sp,
+                                letterSpacing = (-0.5).sp,
+                                color = warm.c1,
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(18.dp))
+                Text(
+                    "Weet je zeker dat je de temperatuur hoger dan 25° wilt instellen?",
+                    fontFamily = Sora,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 19.sp,
+                    lineHeight = 25.sp,
+                    color = Ink.TextStrong,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Pas als je op Ja tikt, gaat de nieuwe temperatuur naar de airco.",
+                    fontFamily = Manrope,
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                    color = Ink.Muted2,
+                )
+                Spacer(Modifier.height(22.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    val btn = RoundedCornerShape(17.dp)
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .height(54.dp)
+                            .clip(btn)
+                            .background(Ink.white(0.05f))
+                            .border(1.dp, Ink.white(0.12f), btn)
+                            .clickable(role = Role.Button) {
+                                view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                                vm.cancelHot()
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("Nee", fontFamily = Manrope, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color(0xFFE4E8EF))
+                    }
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .height(54.dp)
+                            .shadow(14.dp, btn, ambientColor = warm.c2, spotColor = warm.c2)
+                            .clip(btn)
+                            .background(Brush.linearGradient(listOf(warm.c1, warm.c2)))
+                            .clickable(role = Role.Button) {
+                                view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                                vm.confirmHot()
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("Ja", fontFamily = Manrope, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color.White)
+                    }
+                }
+            }
+        }
     }
 }
 

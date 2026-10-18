@@ -66,6 +66,8 @@ data class UiState(
     /** Bezig met ophalen (incl. herhaalpogingen): toont een laad-animatie zolang er nog geen waarde is. */
     val energyTodayLoading: Boolean = false,
     val outdoorLoading: Boolean = false,
+    /** Wacht op "Ja/Nee": temperatuur boven 25° bij Warm of Auto (nog niet verstuurd). */
+    val hotConfirm: HotConfirm? = null,
     /** Reserve-route: alleen aangeboden als het formulier-inloggen technisch faalt. */
     val webLoginOffered: Boolean = false,
     val showWebLogin: Boolean = false,
@@ -95,6 +97,25 @@ internal object Freshness {
     /** Ophalen nodig? [fetchedAt] = laatste gelukte, [attemptAt] = laatste poging. */
     fun due(now: Long, fetchedAt: Long, attemptAt: Long, maxAgeMs: Long, minIntervalMs: Long = MIN_INTERVAL_MS): Boolean =
         now - fetchedAt >= maxAgeMs && now - attemptAt >= minIntervalMs
+}
+
+/** Boven deze temperatuur vraagt de app eerst om bevestiging (alleen bij Warm en Auto). */
+internal const val HOT_LIMIT = 25.0
+
+/** Openstaande vraag "hoger dan 25°?": voor welke unit, van → naar. */
+data class HotConfirm(val unitId: String, val unitName: String, val from: Double, val to: Double)
+
+/**
+ * Moet deze wijziging eerst bevestigd worden? Alleen bij verwarmen (Warm, Auto) en alleen
+ * bij het passeren van 25°: van 25° of lager naar erboven. Wie al boven 25° zit en verder
+ * omhoog gaat, heeft dat eerder al bevestigd (of via de officiële app ingesteld).
+ */
+internal fun needsHotConfirm(mode: Mode?, from: Double, to: Double, fromMode: Mode? = mode): Boolean {
+    val heating = mode == Mode.Heat || mode == Mode.Automatic
+    if (!heating || to <= HOT_LIMIT) return false
+    val wasHeating = fromMode == Mode.Heat || fromMode == Mode.Automatic
+    // Van koelen/drogen/ventileren naar Warm/Auto met een doel boven 25°: ook vragen.
+    return from <= HOT_LIMIT || !wasHeating
 }
 
 /** Na zoveel minuten zonder bediening ververst de lijst rustiger. */
@@ -493,7 +514,11 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
                 _state.update { s ->
                     val merged = fresh.map { u ->
                         val local = s.units.firstOrNull { it.id == u.id }
-                        val candidate = if (local != null && pendingTemp[u.id]?.isActive == true) {
+                        val awaitingAnswer = s.hotConfirm?.unitId == u.id
+                        val candidate = if (local != null && awaitingAnswer) {
+                            // Vraag staat open: de getoonde (nog niet verstuurde) stand vasthouden.
+                            u.copy(setTemperature = local.setTemperature, mode = local.mode, power = local.power)
+                        } else if (local != null && pendingTemp[u.id]?.isActive == true) {
                             // Temperatuur die je net aan het bijstellen bent niet overschrijven.
                             u.copy(setTemperature = local.setTemperature)
                         } else u
@@ -562,7 +587,47 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
         }
         // Modus kiezen op een uitgeschakelde unit = ook aanzetten, voelt natuurlijker.
         if (!unit.power) values["power"] = true
+        if (_state.value.hotConfirm != null) return
+        if (needsHotConfirm(mode, unit.setTemperature, newTemp, fromMode = unit.mode)) {
+            // Bijv. van Koelen 27° naar Warm: eerst bevestigen, dan pas versturen.
+            val before = unit
+            patchLocal(unit.id) { it.copy(mode = mode, setTemperature = newTemp, power = true) }
+            hotAction = HotAction(
+                confirm = { send(before, values) { it.copy(mode = mode, setTemperature = newTemp, power = true) } },
+                cancel = { patchLocal(before.id) { it.copy(mode = before.mode, setTemperature = before.setTemperature, power = before.power) } },
+            )
+            _state.update { it.copy(hotConfirm = HotConfirm(unit.id, unit.name, unit.setTemperature, newTemp)) }
+            return
+        }
         send(unit, values) { it.copy(mode = mode, setTemperature = newTemp, power = true) }
+    }
+
+    private class HotAction(val confirm: () -> Unit, val cancel: () -> Unit)
+    /** Bij een moduswissel: wat Ja/Nee doen. `null` = gewone temperatuurwijziging. */
+    private var hotAction: HotAction? = null
+
+    /** "Ja": de wijziging boven 25° alsnog versturen. */
+    override fun confirmHot() {
+        val q = _state.value.hotConfirm ?: return
+        _state.update { it.copy(hotConfirm = null) }
+        val action = hotAction
+        hotAction = null
+        if (action != null) action.confirm() else schedulePush(q.unitId)
+    }
+
+    /** "Nee": terug naar de vorige waarde; er is niets naar de airco gegaan. */
+    override fun cancelHot() {
+        val q = _state.value.hotConfirm ?: return
+        _state.update { it.copy(hotConfirm = null) }
+        val action = hotAction
+        hotAction = null
+        if (action != null) {
+            action.cancel()
+        } else {
+            patchLocal(q.unitId) { it.copy(setTemperature = q.from) }
+            // Een eerdere, nog niet verstuurde stap (bv. 24,5 → 25) alsnog versturen.
+            schedulePush(q.unitId)
+        }
     }
 
     override fun setFanSpeed(unit: AircoUnit, speed: FanSpeed) =
@@ -581,8 +646,22 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
         val step = current.capabilities.step
         val target = (round(value / step) * step).coerceIn(range)
         if (target == current.setTemperature) return
+        if (_state.value.hotConfirm != null) return // eerst de openstaande vraag beantwoorden
+        val from = current.setTemperature
         patchLocal(unit.id) { it.copy(setTemperature = target) }
+        if (needsHotConfirm(current.mode, from, target)) {
+            // Nog niet versturen: eerst Ja/Nee. De knop toont de nieuwe waarde alvast.
+            pendingTemp[unit.id]?.cancel()
+            hotAction = null
+            _state.update { it.copy(hotConfirm = HotConfirm(unit.id, current.name, from, target)) }
+            return
+        }
+        schedulePush(unit.id)
+    }
 
+    /** Temperatuur na een korte pauze naar MELCloud (bundelt snel tikken / slepen). */
+    private fun schedulePush(unitId: String) {
+        val unit = _state.value.units.firstOrNull { it.id == unitId } ?: return
         pendingTemp[unit.id]?.cancel()
         pendingTemp[unit.id] = viewModelScope.launch {
             delay(900)

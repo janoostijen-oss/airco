@@ -115,6 +115,8 @@ object Icons {
     val Chevron = stroked(2f, "M9 6l6 6-6 6")
     val Back = stroked(2f, "M19 12H5", "M11 6l-6 6 6 6")
     val Warning = stroked(1.8f, "M12 4l9 16H3z", "M12 10v4", "M12 17h.01")
+    val Thermo = stroked(1.8f, "M14 14.76V4a2 2 0 0 0-4 0v10.76a4 4 0 1 0 4 0z", "M12 9v7")
+    val Arrow = stroked(2f, "M5 12h14", "M13 6l6 6-6 6")
 
     val Warm = stroked(
         1.8f,

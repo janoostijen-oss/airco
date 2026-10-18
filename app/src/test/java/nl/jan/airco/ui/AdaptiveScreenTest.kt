@@ -399,6 +399,44 @@ class AdaptiveScreenTest {
         rule.onNode(hasText("Verwarmt naar 21°") and hasAnyAncestor(hasTestTag(TestTags.DETAIL_PANE))).assertIsDisplayed()
     }
 
+    // --------------------------------------------------------------- boven 25°
+
+    private fun hotState() = UiState(
+        screen = Screen.Units, units = sampleUnits(),
+        hotConfirm = nl.jan.airco.HotConfirm("kantoor", "Kantoor", from = 25.0, to = 25.5),
+    )
+
+    @Test @Config(qualifiers = "w411dp-h891dp")
+    fun vraagBoven25ToontWijzigingEnKnoppen() {
+        show(hotState())
+        rule.onNodeWithTag(TestTags.HOT_CONFIRM).assertIsDisplayed()
+        rule.onNodeWithText("Weet je zeker dat je de temperatuur hoger dan 25° wilt instellen?").assertIsDisplayed()
+        rule.onNodeWithText("25,5°").assertIsDisplayed()
+        rule.onNodeWithText("KANTOOR").assertIsDisplayed()
+    }
+
+    @Test @Config(qualifiers = "w411dp-h891dp")
+    fun jaVerstuurt() {
+        show(hotState())
+        rule.onNode(hasText("Ja") and hasAnyAncestor(hasTestTag(TestTags.HOT_CONFIRM))).performClick()
+        assertEquals(1, actions.hotYes)
+        assertEquals(0, actions.hotNo)
+    }
+
+    @Test @Config(qualifiers = "w1280dp-h800dp-land")
+    fun neeZetTerug() {
+        show(hotState())
+        rule.onNode(hasText("Nee") and hasAnyAncestor(hasTestTag(TestTags.HOT_CONFIRM))).performClick()
+        assertEquals(1, actions.hotNo)
+        assertEquals(0, actions.hotYes)
+    }
+
+    @Test @Config(qualifiers = "w411dp-h891dp")
+    fun geenVraagGeenPaneel() {
+        show()
+        rule.onNodeWithTag(TestTags.HOT_CONFIRM).assertDoesNotExist()
+    }
+
     // --------------------------------------------------------------- laden
 
     @Test @Config(qualifiers = "w411dp-h891dp")
@@ -468,6 +506,10 @@ private class FakeActions : AircoActions {
     override fun setTemperature(unit: AircoUnit, value: Double) {}
     var yesterdayLoads = 0
     override fun loadEnergyYesterday() { yesterdayLoads++ }
+    var hotYes = 0
+    var hotNo = 0
+    override fun confirmHot() { hotYes++ }
+    override fun cancelHot() { hotNo++ }
     var summaryTaps = 0
     override fun onSummaryTap() { summaryTaps++ }
 }

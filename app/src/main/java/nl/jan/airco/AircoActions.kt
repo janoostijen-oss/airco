@@ -24,4 +24,7 @@ interface AircoActions {
     fun loadEnergyYesterday()
     /** Tik op Buiten/Vandaag: na een korte pauze verse cijfers als ze verouderd zijn. */
     fun onSummaryTap()
+    /** Antwoord op "hoger dan 25°?": Ja verstuurt, Nee zet terug. */
+    fun confirmHot()
+    fun cancelHot()
 }

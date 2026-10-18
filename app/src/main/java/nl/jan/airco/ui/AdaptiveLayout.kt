@@ -30,5 +30,6 @@ object TestTags {
     const val OUTDOOR_TREND = "outdoor-trend"
     const val OUTDOOR = "outdoor"
     const val LOADING = "loading"
+    const val HOT_CONFIRM = "hot-confirm"
     fun roomRow(id: String) = "room-row-$id"
 }
