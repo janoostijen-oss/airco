@@ -29,5 +29,6 @@ object TestTags {
     const val ENERGY_TODAY = "energy-today"
     const val OUTDOOR_TREND = "outdoor-trend"
     const val OUTDOOR = "outdoor"
+    const val LOADING = "loading"
     fun roomRow(id: String) = "room-row-$id"
 }

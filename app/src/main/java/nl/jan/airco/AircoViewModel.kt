@@ -25,6 +25,8 @@ import nl.jan.airco.data.NotLoggedInException
 import nl.jan.airco.data.RateLimitedException
 import nl.jan.airco.data.TokenStore
 import nl.jan.airco.data.EnergyCache
+import nl.jan.airco.data.fetchAllWithRetry
+import nl.jan.airco.data.fetchEachWithRetry
 import nl.jan.airco.data.outdoorTrend
 import nl.jan.airco.data.outdoorExtremes
 import nl.jan.airco.data.AtTargetTracker
@@ -61,6 +63,9 @@ data class UiState(
     /** Totaal verbruik gisteren (hele dag, kWh); `null` = (nog) onbekend. */
     val energyYesterdayKwh: Double? = null,
     val energyYesterdayLoading: Boolean = false,
+    /** Bezig met ophalen (incl. herhaalpogingen): toont een laad-animatie zolang er nog geen waarde is. */
+    val energyTodayLoading: Boolean = false,
+    val outdoorLoading: Boolean = false,
     /** Reserve-route: alleen aangeboden als het formulier-inloggen technisch faalt. */
     val webLoginOffered: Boolean = false,
     val showWebLogin: Boolean = false,
@@ -234,11 +239,32 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
         outdoorJob = viewModelScope.launch {
             // Per buitenunit één rapport, achter elkaar: binnenunits van dezelfde buitenunit
             // meten dezelfde sensor. Lukt het bij de eerste niet, dan de volgende proberen.
-            val series = mutableListOf<List<nl.jan.airco.data.Reading>>()
-            for ((i, ids) in outdoorGroups(units).withIndex()) {
-                if (i > 0) delay(Freshness.PER_UNIT_GAP_MS)
-                ids.firstNotNullOfOrNull { id -> outdoorSeriesOrNull(id)?.takeIf { it.isNotEmpty() } }?.let { series += it }
-            }
+            _state.update { it.copy(outdoorLoading = true) }
+            // Per buitenunit; lukt het bij geen enkele binnenunit van die buitenunit (fout),
+            // dan wordt alleen die buitenunit na 2, 5 en 12 s opnieuw geprobeerd.
+            val groups = outdoorGroups(units)
+            val series = try {
+                // Per buitenunit: wat lukt telt mee (zoals voorheen), alleen mislukte opnieuw.
+                fetchEachWithRetry(groups.size, gapMs = Freshness.PER_UNIT_GAP_MS) { g ->
+                    var lastError: Exception? = null
+                    for (id in groups[g]) {
+                        try {
+                            val s = api.outdoorSeries(id)
+                            if (s.isNotEmpty()) return@fetchEachWithRetry s
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            lastError = e
+                        }
+                    }
+                    lastError?.let { throw it }
+                    emptyList() // geen fout, alleen geen metingen
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } finally {
+                _state.update { it.copy(outdoorLoading = false) }
+            }.filterNotNull().filter { it.isNotEmpty() }
             if (series.isNotEmpty()) {
                 outdoorFetchedAt = System.currentTimeMillis()
                 val now = Instant.now()
@@ -255,12 +281,6 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
         }
     }
 
-    private suspend fun outdoorSeriesOrNull(unitId: String) = try {
-        api.outdoorSeries(unitId)
-    } catch (e: Exception) {
-        if (e is kotlinx.coroutines.CancellationException) throw e
-        null // Buitentemperatuur is bijzaak: stil overslaan.
-    }
 
     private var energyFetchedAt = 0L
     private var energyAttemptAt = 0L
@@ -289,7 +309,12 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
             return
         }
         energyJob = viewModelScope.launch {
-            val total = energyTotal(units, startOfToday(now, zone), now.plusSeconds(60))
+            _state.update { it.copy(energyTodayLoading = true) }
+            val total = try {
+                energyTotal(units, startOfToday(now, zone), now.plusSeconds(60))
+            } finally {
+                _state.update { it.copy(energyTodayLoading = false) }
+            }
             // Alleen bijwerken als het ophalen voor elke unit lukte; anders de vorige waarde houden.
             if (total != null) {
                 energyFetchedAt = System.currentTimeMillis()
@@ -309,19 +334,26 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
     /** Uitkomst van één optelling; `null` als het ophalen bij een unit mislukte. */
     private class EnergyTotal(val value: Double?)
 
-    private suspend fun energyTotal(units: List<AircoUnit>, from: Instant, to: Instant): EnergyTotal? {
-        // Achter elkaar met een korte pauze, niet alle units tegelijk op de API.
-        val results = mutableListOf<Pair<Boolean?, Double?>>()
-        for ((i, u) in units.withIndex()) {
-            if (i > 0) delay(Freshness.PER_UNIT_GAP_MS)
-            val kwh = try {
-                api.energyKwh(u.id, from, to)
-            } catch (e: Exception) {
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                return null // mislukt (of even geen budget): deze ronde niet meetellen
+    private suspend fun energyTotal(
+        units: List<AircoUnit>,
+        from: Instant,
+        to: Instant,
+        onRetry: (Int) -> Unit = {},
+    ): EnergyTotal? {
+        // Per unit, achter elkaar met een korte pauze. Mislukt er één (time-out, serverfout),
+        // dan alleen die opnieuw na 2, 5 en 12 s — eerder viel dan het hele totaal weg tot de
+        // volgende ronde (soms ruim een minuut "–" na het openen).
+        val results = fetchAllWithRetry(units.size, gapMs = Freshness.PER_UNIT_GAP_MS, onRetry = onRetry) { i ->
+            val u = units[i]
+            try {
+                u.capabilities.hasEnergyMeter to api.energyKwh(u.id, from, to)
+            } catch (e: nl.jan.airco.data.HttpStatusException) {
+                // Unit waarvan niet zeker is dát hij meet en die de vraag afwijst (4xx):
+                // telt niet mee, maar laat het totaal van de rest niet wegvallen.
+                if (u.capabilities.hasEnergyMeter != true && e.code in 400..499 && e.code != 408) u.capabilities.hasEnergyMeter to null
+                else throw e
             }
-            results += u.capabilities.hasEnergyMeter to kwh
-        }
+        } ?: return null
         return EnergyTotal(combineEnergy(results))
     }
 
@@ -350,7 +382,12 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
         if (units.isEmpty()) return
         yesterdayJob = viewModelScope.launch {
             _state.update { it.copy(energyYesterdayLoading = true) }
-            val total = energyTotal(units, startOfYesterday(now, zone), startOfToday(now, zone))
+            val total = try {
+                energyTotal(units, startOfYesterday(now, zone), startOfToday(now, zone))
+            } catch (e: Exception) {
+                _state.update { it.copy(energyYesterdayLoading = false) }
+                throw e
+            }
             if (total != null) {
                 val fetchedAt = now.atZone(zone)
                 yesterdayValidUntil = EnergyCache.validUntil(fetchedAt, zone).toInstant()

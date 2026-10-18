@@ -233,7 +233,7 @@ class AdaptiveScreenTest {
         show(UiState(screen = Screen.Units, units = sampleUnits(), energyTodayKwh = 5.63, energyYesterdayLoading = true))
         rule.onNodeWithTag(TestTags.ENERGY_TODAY).performClick()
         rule.waitForIdle()
-        rule.onNode(hasText("…") and hasAnyAncestor(hasTestTag(TestTags.ENERGY_TODAY)), useUnmergedTree = true).assertIsDisplayed()
+        rule.onNode(hasTestTag(TestTags.LOADING) and hasAnyAncestor(hasTestTag(TestTags.ENERGY_TODAY)), useUnmergedTree = true).assertIsDisplayed()
     }
 
     // --------------------------------------------------------------- trend buiten
@@ -397,6 +397,38 @@ class AdaptiveScreenTest {
         show()
         rule.onAllNodes(hasText("Op temperatuur")).fetchSemanticsNodes().let { assertEquals(0, it.size) }
         rule.onNode(hasText("Verwarmt naar 21°") and hasAnyAncestor(hasTestTag(TestTags.DETAIL_PANE))).assertIsDisplayed()
+    }
+
+    // --------------------------------------------------------------- laden
+
+    @Test @Config(qualifiers = "w411dp-h891dp")
+    fun vandaagLaadtMetAnimatieZolangErGeenWaardeIs() {
+        show(UiState(screen = Screen.Units, units = sampleUnits(), outdoorTemperature = 8.5, energyTodayLoading = true))
+        rule.onNode(hasTestTag(TestTags.LOADING) and hasAnyAncestor(hasTestTag(TestTags.ENERGY_TODAY)), useUnmergedTree = true)
+            .assertIsDisplayed()
+        rule.onAllNodes(hasText("–") and hasAnyAncestor(hasTestTag(TestTags.ENERGY_TODAY)), useUnmergedTree = true)
+            .fetchSemanticsNodes().let { assertEquals("geen streepje tijdens laden", 0, it.size) }
+    }
+
+    @Test @Config(qualifiers = "w411dp-h891dp")
+    fun bekendeWaardeBlijftStaanTijdensVerversen() {
+        show(UiState(screen = Screen.Units, units = sampleUnits(), energyTodayKwh = 5.63, energyTodayLoading = true))
+        rule.onNode(hasText("5,6") and hasAnyAncestor(hasTestTag(TestTags.ENERGY_TODAY)), useUnmergedTree = true).assertIsDisplayed()
+        rule.onAllNodes(hasTestTag(TestTags.LOADING), useUnmergedTree = true).fetchSemanticsNodes()
+            .let { assertEquals(0, it.size) }
+    }
+
+    @Test @Config(qualifiers = "w700dp-h840dp")
+    fun buitenLaadtMetAnimatie() {
+        show(UiState(screen = Screen.Units, units = sampleUnits(), outdoorLoading = true, energyTodayKwh = 5.63))
+        rule.onNode(hasTestTag(TestTags.LOADING) and hasAnyAncestor(hasTestTag(TestTags.OUTDOOR)), useUnmergedTree = true)
+            .assertIsDisplayed()
+    }
+
+    @Test @Config(qualifiers = "w411dp-h891dp")
+    fun naMislukkenStreepje() {
+        show(UiState(screen = Screen.Units, units = sampleUnits(), energyTodayLoading = false))
+        rule.onNode(hasText("–") and hasAnyAncestor(hasTestTag(TestTags.ENERGY_TODAY)), useUnmergedTree = true).assertIsDisplayed()
     }
 
     @Test @Config(qualifiers = "w411dp-h891dp")

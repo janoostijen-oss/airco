@@ -12,6 +12,8 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -1123,10 +1125,9 @@ private fun EnergyStat(state: UiState, vm: AircoActions, size: SummarySize, modi
     var yesterday by rememberSaveable { mutableStateOf(false) }
     val view = LocalView.current
     val kwh = if (yesterday) state.energyYesterdayKwh else state.energyTodayKwh
-    val text = when {
-        yesterday && kwh == null && state.energyYesterdayLoading -> "…"
-        else -> energyLabel(kwh)
-    }
+    // Nog geen waarde en bezig met ophalen (of opnieuw proberen): laad-animatie i.p.v. "–".
+    val loading = kwh == null && (if (yesterday) state.energyYesterdayLoading else state.energyTodayLoading)
+    val text = energyLabel(kwh)
     SummaryStat(
         if (yesterday) "Gisteren" else "Vandaag",
         size,
@@ -1144,7 +1145,8 @@ private fun EnergyStat(state: UiState, vm: AircoActions, size: SummarySize, modi
                 vm.onSummaryTap()
             },
     ) {
-        StatValue(text, if (kwh != null) " kWh" else null, size.value, size.kwhUnit)
+        if (loading) LoadingValue(size, unit = " kWh", unitSp = size.kwhUnit)
+        else StatValue(text, if (kwh != null) " kWh" else null, size.value, size.kwhUnit)
     }
 }
 
@@ -1233,6 +1235,76 @@ private fun StatValue(value: String, unit: String?, valueSp: Int, unitSp: Int) {
                 maxLines = 1,
                 softWrap = false,
                 modifier = Modifier.padding(bottom = (valueSp * 0.15f).dp),
+            )
+        }
+    }
+}
+
+/**
+ * Laad-animatie op de plek van een getal: een afgerond vlakje met een lichtglans
+ * die er steeds overheen schuift, plus de eenheid erachter (zodat niets verspringt
+ * als het getal binnenkomt). Alleen getekend, zonder recompositie per frame.
+ */
+@Composable
+private fun LoadingValue(size: SummarySize, unit: String?, unitSp: Int) {
+    val sweep = rememberInfiniteTransition(label = "loading")
+    val t by sweep.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            tween(1_300, easing = androidx.compose.animation.core.LinearEasing),
+        ),
+        label = "sheen",
+    )
+    val pulse by sweep.animateFloat(
+        initialValue = 0.05f,
+        targetValue = 0.10f,
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            tween(650),
+            androidx.compose.animation.core.RepeatMode.Reverse,
+        ),
+        label = "pulse",
+    )
+    val density = LocalDensity.current
+    val h = with(density) { (size.value * 0.78f).sp.toDp() }
+    val w = with(density) { (size.value * 1.7f).sp.toDp() }
+    Row(
+        verticalAlignment = Alignment.Bottom,
+        modifier = Modifier
+            .testTag(TestTags.LOADING)
+            .semantics { contentDescription = "Bezig met ophalen" },
+    ) {
+        Box(
+            Modifier
+                .padding(bottom = (size.value * 0.12f).dp)
+                .size(width = w, height = h)
+                .clip(RoundedCornerShape(h / 2))
+                .drawBehind {
+                    drawRect(Ink.white(pulse))
+                    // Glans: smalle, zachte band die van links naar rechts schuift.
+                    val band = this.size.width * 0.6f
+                    val x = -band + (this.size.width + 2 * band) * t
+                    drawRect(
+                        Brush.horizontalGradient(
+                            0f to Color.Transparent,
+                            0.5f to Ink.white(0.22f),
+                            1f to Color.Transparent,
+                            startX = x - band / 2,
+                            endX = x + band / 2,
+                        ),
+                    )
+                },
+        )
+        if (unit != null) {
+            Text(
+                unit,
+                fontFamily = Sora,
+                fontWeight = FontWeight.Light,
+                fontSize = unitSp.sp,
+                color = Ink.Dim.copy(alpha = 0.6f),
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier.padding(bottom = (size.value * 0.15f).dp),
             )
         }
     }
@@ -1354,7 +1426,8 @@ private fun OutdoorStat(state: UiState, vm: AircoActions, size: SummarySize, mod
             .semantics(mergeDescendants = true) { contentDescription = description },
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            StatValue(text, null, size.value, size.unit)
+            if (value == null && state.outdoorLoading) LoadingValue(size, unit = "°", unitSp = size.value)
+            else StatValue(text, null, size.value, size.unit)
             if (view == 0 && state.outdoorTemperature != null) {
                 Spacer(Modifier.width(size.arrowGap.dp))
                 TrendArrows(state.outdoorTrend, size)
