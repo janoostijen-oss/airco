@@ -13,6 +13,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeUp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -418,8 +419,11 @@ class AdaptiveScreenTest {
     @Test @Config(qualifiers = "w411dp-h891dp")
     fun jaVerstuurt() {
         show(hotState())
-        rule.onNode(hasText("Ja") and hasAnyAncestor(hasTestTag(TestTags.HOT_CONFIRM))).performClick()
-        assertEquals(1, actions.hotYes)
+        val ja = rule.onNode(hasText("Ja") and hasAnyAncestor(hasTestTag(TestTags.HOT_CONFIRM)))
+        val b = ja.fetchSemanticsNode().boundsInRoot
+        val root = rule.onRoot().fetchSemanticsNode().boundsInRoot
+        ja.performClick()
+        assertEquals("ja=$b root=$root no=${actions.hotNo}", 1, actions.hotYes)
         assertEquals(0, actions.hotNo)
     }
 
@@ -429,6 +433,26 @@ class AdaptiveScreenTest {
         rule.onNode(hasText("Nee") and hasAnyAncestor(hasTestTag(TestTags.HOT_CONFIRM))).performClick()
         assertEquals(1, actions.hotNo)
         assertEquals(0, actions.hotYes)
+    }
+
+    @Test @Config(qualifiers = "w1280dp-h800dp-land")
+    fun jaVerstuurtTablet() {
+        show(hotState())
+        val ja = rule.onNode(hasText("Ja") and hasAnyAncestor(hasTestTag(TestTags.HOT_CONFIRM)))
+        val b = ja.fetchSemanticsNode().boundsInRoot
+        val root = rule.onRoot().fetchSemanticsNode().boundsInRoot
+        ja.performClick()
+        assertEquals("ja=$b root=$root", 1, actions.hotYes)
+    }
+
+    @Test @Config(qualifiers = "w411dp-h891dp")
+    fun neeTelefoon() {
+        show(hotState())
+        val nee = rule.onNode(hasText("Nee") and hasAnyAncestor(hasTestTag(TestTags.HOT_CONFIRM)))
+        val b = nee.fetchSemanticsNode().boundsInRoot
+        val root = rule.onRoot().fetchSemanticsNode().boundsInRoot
+        nee.performClick()
+        assertEquals("nee=$b root=$root", 1, actions.hotNo)
     }
 
     @Test @Config(qualifiers = "w411dp-h891dp")
