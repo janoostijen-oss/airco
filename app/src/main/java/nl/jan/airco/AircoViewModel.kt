@@ -243,9 +243,9 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
             // Per buitenunit; lukt het bij geen enkele binnenunit van die buitenunit (fout),
             // dan wordt alleen die buitenunit na 2, 5 en 12 s opnieuw geprobeerd.
             val groups = outdoorGroups(units)
-            val series = try {
+            val fetched: List<List<nl.jan.airco.data.Reading>?> = try {
                 // Per buitenunit: wat lukt telt mee (zoals voorheen), alleen mislukte opnieuw.
-                fetchEachWithRetry(groups.size, gapMs = Freshness.PER_UNIT_GAP_MS) { g ->
+                fetchEachWithRetry<List<nl.jan.airco.data.Reading>>(groups.size, gapMs = Freshness.PER_UNIT_GAP_MS) { g ->
                     var lastError: Exception? = null
                     for (id in groups[g]) {
                         try {
@@ -260,11 +260,10 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
                     lastError?.let { throw it }
                     emptyList() // geen fout, alleen geen metingen
                 }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
             } finally {
                 _state.update { it.copy(outdoorLoading = false) }
-            }.filterNotNull().filter { it.isNotEmpty() }
+            }
+            val series = fetched.filterNotNull().filter { it.isNotEmpty() }
             if (series.isNotEmpty()) {
                 outdoorFetchedAt = System.currentTimeMillis()
                 val now = Instant.now()
