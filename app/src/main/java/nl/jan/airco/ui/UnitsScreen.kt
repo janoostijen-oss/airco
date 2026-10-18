@@ -697,8 +697,9 @@ private fun HotConfirmSheet(confirm: nl.jan.airco.HotConfirm?, vm: AircoActions)
                     .fillMaxWidth()
                     .testTag(TestTags.HOT_CONFIRM)
                     .shadow(30.dp, sheetShape, clip = false)
-                    .clip(sheetShape)
-                    .background(Brush.verticalGradient(listOf(Color(0xFF1A1E28), Color(0xFF12151C))))
+                    // Afgeronde achtergrond i.p.v. een clip-laag: niets in het paneel hoeft
+                    // afgeknipt, en zo valt elke tik binnen het paneel ook echt op het paneel.
+                    .background(Brush.verticalGradient(listOf(Color(0xFF1A1E28), Color(0xFF12151C))), sheetShape)
                     .border(1.dp, Ink.white(0.09f), sheetShape)
                     // Tikken op het paneel zelf mag niet als "ernaast" tellen.
                     .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {}
@@ -803,8 +804,7 @@ private fun HotConfirmSheet(confirm: nl.jan.airco.HotConfirm?, vm: AircoActions)
                                 vm.confirmHot()
                             }
                             .shadow(14.dp, btn, clip = false, ambientColor = warm.c2, spotColor = warm.c2)
-                            .clip(btn)
-                            .background(Brush.linearGradient(listOf(warm.c1, warm.c2))),
+                            .background(Brush.linearGradient(listOf(warm.c1, warm.c2)), btn),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text("Ja", fontFamily = Manrope, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = Color.White)
