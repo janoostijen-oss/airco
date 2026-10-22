@@ -31,5 +31,8 @@ object TestTags {
     const val OUTDOOR = "outdoor"
     const val LOADING = "loading"
     const val HOT_CONFIRM = "hot-confirm"
+    const val DAY_CHART = "day-chart"
+    const val DAY_CHART_TIP = "day-chart-tip"
+    const val DAY_CHART_LOADING = "day-chart-loading"
     fun roomRow(id: String) = "room-row-$id"
 }

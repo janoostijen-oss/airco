@@ -136,7 +136,9 @@ private fun isAtTarget(unit: AircoUnit): Boolean = unit.id in LocalAtTarget.curr
 
 @Composable
 fun UnitsScreen(state: UiState, vm: AircoActions) {
-    CompositionLocalProvider(LocalAtTarget provides state.atTarget) { UnitsScreenContent(state, vm) }
+    CompositionLocalProvider(LocalAtTarget provides state.atTarget, LocalDayCharts provides state.dayCharts) {
+        UnitsScreenContent(state, vm)
+    }
 }
 
 @Composable
@@ -276,7 +278,7 @@ private fun UnitsScreenContent(state: UiState, vm: AircoActions) {
                         }
                         Spacer(Modifier.height(22.dp))
                         CompositionLocalProvider(LocalPageScrolling provides { detailScroll.isScrollInProgress }) {
-                            UnitControls(detailUnit, vm)
+                            UnitControls(detailUnit, vm, chartActive = detailId != null)
                         }
                     }
                 }
@@ -484,7 +486,7 @@ private fun RoomCard(unit: AircoUnit, selected: Boolean, modifier: Modifier, onC
 
 /** Telefoon: kop, draaiknop, modus en ventilator onder elkaar (ongewijzigd ontwerp). */
 @Composable
-private fun UnitControls(unit: AircoUnit, vm: AircoActions) {
+private fun UnitControls(unit: AircoUnit, vm: AircoActions, chartActive: Boolean) {
     DetailHeader(unit, vm)
     Spacer(Modifier.height(8.dp))
     DialBlock(unit, vm)
@@ -492,6 +494,8 @@ private fun UnitControls(unit: AircoUnit, vm: AircoActions) {
     ModeSection(unit, unit.isConnected, vm)
     Spacer(Modifier.height(20.dp))
     FanSection(unit, unit.mode.style(), unit.isConnected, vm)
+    Spacer(Modifier.height(26.dp))
+    DayChartSection(unit, vm, active = chartActive, scrolling = LocalPageScrolling.current)
 }
 
 /** Naam + status + aan/uit; maten per schermformaat. */
@@ -615,7 +619,7 @@ private fun DialBlock(unit: AircoUnit, vm: AircoActions) {
  * stilstaat (en weggehaald zolang hij scrolt). Één systeemaanroep per scroll i.p.v. elk frame.
  */
 @Composable
-private fun rememberQuietGestureExclusion(scrolling: () -> Boolean): Modifier {
+internal fun rememberQuietGestureExclusion(scrolling: () -> Boolean): Modifier {
     val view = LocalView.current
     val holder = remember(view) { ExclusionHolder(view) }
     val isScrolling = scrolling()
@@ -1866,6 +1870,8 @@ private fun FoldableDetail(unit: AircoUnit, vm: AircoActions, modifier: Modifier
         ModeSection(unit, unit.isConnected, vm)
         Spacer(Modifier.height(18.dp))
         FanSection(unit, unit.mode.style(), unit.isConnected, vm)
+        Spacer(Modifier.height(26.dp))
+        DayChartSection(unit, vm, active = true, scrolling = LocalPageScrolling.current)
         }
     }
 }
@@ -1904,6 +1910,8 @@ private fun TabletDetail(unit: AircoUnit, vm: AircoActions, modifier: Modifier) 
                     Spacer(Modifier.height(18.dp))
                     CompositionLocalProvider(LocalPageScrolling provides { scroll.isScrollInProgress }) {
                         FanSection(unit, unit.mode.style(), unit.isConnected, vm)
+                        Spacer(Modifier.height(26.dp))
+                        DayChartSection(unit, vm, active = true, scrolling = LocalPageScrolling.current)
                     }
                 }
             }

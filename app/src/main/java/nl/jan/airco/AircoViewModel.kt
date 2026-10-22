@@ -30,6 +30,7 @@ import nl.jan.airco.data.fetchEachWithRetry
 import nl.jan.airco.data.outdoorTrend
 import nl.jan.airco.data.outdoorExtremes
 import nl.jan.airco.data.AtTargetTracker
+import nl.jan.airco.data.Reading
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -66,6 +67,8 @@ data class UiState(
     /** Bezig met ophalen (incl. herhaalpogingen): toont een laad-animatie zolang er nog geen waarde is. */
     val energyTodayLoading: Boolean = false,
     val outdoorLoading: Boolean = false,
+    /** Grafiek "vandaag" per unit-id (alleen units waarvan de detailpagina open was). */
+    val dayCharts: Map<String, DayChart> = emptyMap(),
     /** Wacht op "Ja/Nee": temperatuur boven 25° bij Warm of Auto (nog niet verstuurd). */
     val hotConfirm: HotConfirm? = null,
     /** Reserve-route: alleen aangeboden als het formulier-inloggen technisch faalt. */
@@ -73,6 +76,34 @@ data class UiState(
     val showWebLogin: Boolean = false,
     val loginUrl: String? = null,
 )
+
+/**
+ * Temperatuurverloop van één unit sinds [from] (lokale middernacht): huidig en
+ * doel (doel [Double.NaN] = uit). [loading] = bezig met ophalen; [loaded] = er is
+ * minstens één keer een antwoord geweest (ook als dat leeg was).
+ */
+data class DayChart(
+    val from: Instant,
+    val room: List<Reading> = emptyList(),
+    val target: List<Reading> = emptyList(),
+    val loading: Boolean = false,
+    val loaded: Boolean = false,
+)
+
+/**
+ * Nieuwe stand uit de lijst (elke minuut) achter de grafiek plakken, zodat hij
+ * bijblijft zonder extra verzoeken. Alleen bij verandering; doel NaN als de unit uit staat.
+ */
+internal fun DayChart.withLive(unit: AircoUnit, now: Instant): DayChart {
+    if (now.isBefore(from)) return this
+    val room = unit.roomTemperature
+    val newRoom = if (room != null && room != this.room.lastOrNull()?.value) this.room + Reading(now, room) else this.room
+    val tgt = if (unit.power) unit.setTemperature else Double.NaN
+    val last = target.lastOrNull()?.value
+    val same = last != null && (last == tgt || (last.isNaN() && tgt.isNaN()))
+    val newTarget = if (!same && !(last == null && tgt.isNaN())) target + Reading(now, tgt) else target
+    return if (newRoom === this.room && newTarget === target) this else copy(room = newRoom, target = newTarget)
+}
 
 /**
  * Versheid van de "bijzaken" (buitentemperatuur-rapport, verbruik): hoe oud
@@ -121,6 +152,8 @@ internal fun needsHotConfirm(mode: Mode?, from: Double, to: Double, fromMode: Mo
 /** Na zoveel minuten zonder bediening ververst de lijst rustiger. */
 private const val IDLE_AFTER_MS = 5 * 60_000L
 private const val POLL_MS = 60_000L
+/** Grafiek: hooguit eens per 10 min per unit opnieuw (daartussen bijgehouden uit de lijst). */
+private const val CHART_MAX_AGE_MS = 10 * 60_000L
 private const val POLL_IDLE_MS = 180_000L
 private const val SETTLE_MS = 4000L
 
@@ -424,6 +457,63 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
         }
     }
 
+    // ---------- Grafiek vandaag ----------
+
+    private val chartFetchedAt = mutableMapOf<String, Long>()
+    private val chartAttemptAt = mutableMapOf<String, Long>()
+    private var chartJob: Job? = null
+    private var chartJobUnit: String? = null
+
+    /**
+     * Grafiek voor de geopende unit: één rapport-verzoek, hooguit eens per 10 minuten
+     * per unit (daartussen plakt elke lijst-ronde de nieuwe stand erachter, zie
+     * [withLive]). Een nieuwe dag begint met een lege grafiek. Wissel je van kamer,
+     * dan stopt het ophalen van de vorige.
+     */
+    override fun loadDayChart(unitId: String) {
+        if (_state.value.screen != Screen.Units) return
+        if (chartJob?.isActive == true && chartJobUnit == unitId) return
+        val now = Instant.now()
+        val from = startOfToday(now, ZoneId.systemDefault())
+        val existing = _state.value.dayCharts[unitId]?.takeIf { it.from == from }
+        if (existing == null) {
+            chartFetchedAt.remove(unitId)
+            chartAttemptAt.remove(unitId)
+        }
+        val nowMs = System.currentTimeMillis()
+        val due = Freshness.due(nowMs, chartFetchedAt[unitId] ?: 0L, chartAttemptAt[unitId] ?: 0L, CHART_MAX_AGE_MS)
+        if (!due) return
+        chartAttemptAt[unitId] = nowMs
+        chartJob?.cancel()
+        chartJobUnit = unitId
+        _state.update { s -> s.copy(dayCharts = s.dayCharts + (unitId to (existing ?: DayChart(from)).copy(loading = true))) }
+        chartJob = viewModelScope.launch {
+            val series = try {
+                fetchEachWithRetry(1) { api.daySeries(unitId, from) }.first()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                chartAttemptAt.remove(unitId) // afgebroken (andere kamer): straks gewoon opnieuw
+                _state.update { s -> s.copy(dayCharts = s.dayCharts.update(unitId) { it.copy(loading = false) }) }
+                throw e
+            }
+            if (series != null) chartFetchedAt[unitId] = System.currentTimeMillis()
+            _state.update { s ->
+                val unit = s.units.firstOrNull { it.id == unitId }
+                s.copy(
+                    dayCharts = s.dayCharts.update(unitId) { c ->
+                        if (series == null) c.copy(loading = false)
+                        else {
+                            val fresh = DayChart(from, series.room, series.target, loading = false, loaded = true)
+                            unit?.let { fresh.withLive(it, Instant.now()) } ?: fresh
+                        }
+                    },
+                )
+            }
+        }
+    }
+
+    private inline fun Map<String, DayChart>.update(id: String, f: (DayChart) -> DayChart): Map<String, DayChart> =
+        this[id]?.let { this + (id to f(it)) } ?: this
+
     // ---------- Automatisch verversen ----------
 
     private var pollJob: Job? = null
@@ -531,8 +621,13 @@ class AircoViewModel(app: Application) : AndroidViewModel(app), AircoActions {
                     }
                     val units = if (merged == s.units) s.units else merged
                     val reached = atTarget.update(units, suppressed = changedAt.keys)
+                    val now = Instant.now()
+                    val charts = if (s.dayCharts.isEmpty()) s.dayCharts else s.dayCharts.mapValues { (id, c) ->
+                        units.firstOrNull { it.id == id }?.let { c.withLive(it, now) } ?: c
+                    }
                     s.copy(
                         units = units,
+                        dayCharts = charts,
                         atTarget = if (reached == s.atTarget) s.atTarget else reached,
                         loading = false,
                         pullRefreshing = false,

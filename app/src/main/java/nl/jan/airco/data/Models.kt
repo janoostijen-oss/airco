@@ -205,42 +205,73 @@ data class Reading(val time: Instant, val value: Double)
  */
 object ReportParser {
     private const val OUTSIDE = "outside_temperature"
+    private const val ROOM = "room_temperature"
 
-    fun outdoorSeries(body: String): List<Reading> {
+    fun outdoorSeries(body: String): List<Reading> = series(
+        reports(body),
+        match = { id, label -> id == OUTSIDE || label.contains("outside", ignoreCase = true) },
+        gaps = false,
+    )
+
+    /**
+     * Huidige temperatuur en doeltemperatuur van één binnenunit (voor de grafiek
+     * "vandaag"). Een doel zonder waarde (`y: null`) telt als "uit": een
+     * [Reading] met [Double.NaN], zodat de stippellijn daar onderbroken wordt.
+     */
+    fun daySeries(body: String): DaySeries {
+        val r = reports(body)
+        return DaySeries(
+            room = series(r, match = { id, _ -> id == ROOM }, gaps = false),
+            target = series(r, match = { id, _ -> isTargetId(id) }, gaps = true),
+        )
+    }
+
+    /** `set_temperature`, `set_temperature_zone1`, `target_temperature` … (geen tank/flow). */
+    internal fun isTargetId(id: String): Boolean =
+        (id.startsWith("set_") || id.startsWith("target_")) && id.contains("temperature") &&
+            !id.contains("tank") && !id.contains("flow")
+
+    private fun reports(body: String): List<JSONObject> {
         val trimmed = body.trim()
-        val reports: List<JSONObject> = when {
+        return when {
             trimmed.startsWith("[") -> JSONArray(trimmed).let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it) } }
             trimmed.startsWith("{") -> listOf(JSONObject(trimmed))
             else -> emptyList()
         }
+    }
+
+    private fun series(reports: List<JSONObject>, match: (id: String, label: String) -> Boolean, gaps: Boolean): List<Reading> {
         val out = mutableListOf<Reading>()
         fun add(time: String, value: Double) {
-            if (value.isNaN()) return
+            if (value.isNaN() && !gaps) return
             val t = parseUtc(time) ?: return
             out += Reading(t, value)
         }
+        val ids = mutableSetOf<String>()
         for (report in reports) {
             val datasets = report.optJSONArray("datasets")
             if (datasets != null) for (i in 0 until datasets.length()) {
                 val ds = datasets.optJSONObject(i) ?: continue
-                val isOutside = ds.optString("id") == OUTSIDE ||
-                    ds.optString("label").contains("outside", ignoreCase = true)
-                if (!isOutside) continue
+                val id = ds.optString("id")
+                if (!match(id, ds.optString("label"))) continue
+                ids += id
                 val data = ds.optJSONArray("data") ?: continue
                 for (j in 0 until data.length()) {
                     val p = data.optJSONObject(j) ?: continue
-                    if (p.isNull("y")) continue
-                    add(p.optString("x"), p.optDouble("y"))
+                    add(p.optString("x"), if (p.isNull("y")) Double.NaN else p.optDouble("y"))
                 }
             }
-            val triggers = report.optJSONArray("previousTriggers")
-            if (triggers != null) for (i in 0 until triggers.length()) {
+        }
+        for (report in reports) {
+            val triggers = report.optJSONArray("previousTriggers") ?: continue
+            for (i in 0 until triggers.length()) {
                 val t = triggers.optJSONObject(i) ?: continue
-                if (t.optString("measure") != OUTSIDE || t.isNull("value")) continue
+                val measure = t.optString("measure")
+                if (!(measure in ids || match(measure, "")) || t.isNull("value")) continue
                 add(t.optString("trigger"), t.optDouble("value"))
             }
         }
-        return out.sortedBy { it.time }
+        return out.distinctBy { it.time }.sortedBy { it.time }
     }
 
     /** "2026-10-16 17:00:00.0000000", "2026-10-16T17:00:00Z", … → tijdstip in UTC. */
@@ -257,6 +288,20 @@ object ReportParser {
             null
         }?.takeIf { it.atOffset(ZoneOffset.UTC).year < 9000 } // 9999-12-31 = "geen meting"
     }
+}
+
+/** Huidig + doel van één unit; doel [Double.NaN] = uit. */
+data class DaySeries(val room: List<Reading>, val target: List<Reading>)
+
+/**
+ * Knipt een reeks bij tot [from] (lokale middernacht) … [to]: de laatste meting
+ * vóór [from] wordt het beginpunt óp [from] (zo begint de lijn om 00:00 met de
+ * waarde die toen gold), metingen na [to] vallen weg.
+ */
+fun List<Reading>.clipTo(from: Instant, to: Instant): List<Reading> {
+    val before = lastOrNull { it.time.isBefore(from) }
+    val inside = filter { !it.time.isBefore(from) && !it.time.isAfter(to) }
+    return if (before != null && inside.firstOrNull()?.time != from) listOf(Reading(from, before.value)) + inside else inside
 }
 
 /** Waarde op tijdstip [at]: de laatste meting op of vóór dat moment (metingen staan oud → nieuw). */

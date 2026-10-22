@@ -27,4 +27,6 @@ interface AircoActions {
     /** Antwoord op "hoger dan 25°?": Ja verstuurt, Nee zet terug. */
     fun confirmHot()
     fun cancelHot()
+    /** Grafiek "vandaag" voor deze unit ophalen als hij er nog niet (vers genoeg) is. */
+    fun loadDayChart(unitId: String)
 }

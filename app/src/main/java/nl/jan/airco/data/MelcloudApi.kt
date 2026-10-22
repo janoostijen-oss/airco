@@ -102,6 +102,25 @@ class MelcloudApi(private val tokens: TokenStore, private val credentials: Crede
     }
 
     /**
+     * Huidige en doeltemperatuur van één unit vanaf [from] (lokale middernacht)
+     * tot nu, voor de grafiek op de detailpagina. Eén verzoek (bijzaak).
+     */
+    suspend fun daySeries(unitId: String, from: Instant): DaySeries {
+        val now = Instant.now().truncatedTo(ChronoUnit.SECONDS)
+        val url = "$BASE_URL/report/v1/trendsummary".toHttpUrl().newBuilder()
+            .addQueryParameter("unitId", unitId)
+            .addQueryParameter("from", REPORT_DATE.format(from))
+            .addQueryParameter("to", REPORT_DATE.format(now))
+            .addQueryParameter("period", "Hourly")
+            .build()
+        val body = send(RequestKind.Extra) { Request.Builder().url(url).get() }
+        return withContext(Dispatchers.Default) {
+            val s = ReportParser.daySeries(body)
+            DaySeries(room = s.room.clipTo(from, now), target = s.target.clipTo(from, now))
+        }
+    }
+
+    /**
      * Stroomverbruik (kWh) van deze unit in het venster [from, to), per uur
      * opgeteld door MELCloud. `null` = geen meetpunten in dat venster.
      */

@@ -15,6 +15,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.swipeUp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import nl.jan.airco.AircoActions
@@ -507,6 +508,66 @@ class AdaptiveScreenTest {
         assertEquals("op één regel: $vandaag / $actief", vandaag.top, actief.top, 1f)
     }
 
+    // --------------------------------------------------------------- grafiek vandaag
+
+    private fun chartState(loading: Boolean = false): UiState {
+        val now = java.time.Instant.now()
+        val from = nl.jan.airco.startOfToday(now, java.time.ZoneId.systemDefault())
+        val span = java.time.Duration.between(from, now).toMillis().coerceAtLeast(60_000)
+        fun at(f: Double) = from.plusMillis((span * f).toLong())
+        val chart = nl.jan.airco.DayChart(
+            from = from,
+            room = listOf(
+                nl.jan.airco.data.Reading(at(0.0), 19.0),
+                nl.jan.airco.data.Reading(at(0.4), 20.5),
+                nl.jan.airco.data.Reading(at(0.8), 21.5),
+            ),
+            target = listOf(nl.jan.airco.data.Reading(at(0.0), Double.NaN), nl.jan.airco.data.Reading(at(0.3), 21.0)),
+            loading = loading,
+            loaded = !loading,
+        )
+        return UiState(screen = Screen.Units, units = sampleUnits(), dayCharts = mapOf("kantoor" to chart))
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h891dp")
+    fun telefoon_grafiekAlleenOphalenAlsDetailOpen() {
+        show(chartState())
+        assertTrue(actions.chartLoads.isEmpty()) // detail is opgewarmd maar niet open
+        rule.onNode(hasText("Kantoor") and hasAnyAncestor(hasTestTag(TestTags.OVERVIEW))).performClick()
+        rule.waitForIdle()
+        assertEquals(listOf("kantoor"), actions.chartLoads)
+        rule.onNodeWithTag(TestTags.DAY_CHART).performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("Huidig 19° – 22°").assertExists() // 22 = de stand van nu
+    }
+
+    @Test
+    @Config(qualifiers = "w700dp-h840dp")
+    fun foldable_schuivenToontWaarden() {
+        show(chartState())
+        assertEquals(listOf("kantoor"), actions.chartLoads)
+        rule.onNodeWithTag(TestTags.DAY_CHART_TIP).assertDoesNotExist()
+        rule.onNodeWithTag(TestTags.DAY_CHART).performScrollTo().performTouchInput {
+            down(centerLeft + androidx.compose.ui.geometry.Offset(width * 0.2f, 0f))
+            moveBy(androidx.compose.ui.geometry.Offset(width * 0.1f, 0f))
+            moveBy(androidx.compose.ui.geometry.Offset(width * 0.1f, 0f))
+        }
+        rule.onNodeWithTag(TestTags.DAY_CHART_TIP).assertExists()
+        rule.onNode(hasText("Doel ") and hasAnyAncestor(hasTestTag(TestTags.DAY_CHART_TIP))).assertExists()
+        rule.onNodeWithTag(TestTags.DAY_CHART).performTouchInput { up() }
+        rule.waitForIdle()
+        rule.onNodeWithTag(TestTags.DAY_CHART_TIP).assertDoesNotExist()
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun tablet_grafiekLaadtMetAnimatie() {
+        show(UiState(screen = Screen.Units, units = sampleUnits()))
+        rule.onNodeWithTag(TestTags.DAY_CHART_LOADING).assertExists()
+        rule.onNodeWithTag(TestTags.DAY_CHART).assertDoesNotExist()
+        assertEquals(listOf("kantoor"), actions.chartLoads)
+    }
+
     private fun density(): Float =
         androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
             .resources.displayMetrics.density
@@ -536,6 +597,8 @@ private class FakeActions : AircoActions {
     override fun cancelHot() { hotNo++ }
     var summaryTaps = 0
     override fun onSummaryTap() { summaryTaps++ }
+    val chartLoads = mutableListOf<String>()
+    override fun loadDayChart(unitId: String) { chartLoads += unitId }
 }
 
 private fun sampleUnits(): List<AircoUnit> {
